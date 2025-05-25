@@ -56,6 +56,9 @@ SCHEDULED_TASKS_FILE = 'scheduled_tasks.json'
 # File to store temp voice channels
 TEMP_VOICE_FILE = 'temp_voice.json'
 
+# File to store fresh account settings
+FRESH_ACCOUNT_FILE = 'fresh_accounts.json'
+
 # Backup directory
 BACKUP_DIR = 'backups'
 
@@ -138,6 +141,25 @@ def save_temp_voice(data):
 # Create backup directory if it doesn't exist
 os.makedirs(BACKUP_DIR, exist_ok=True)
 
+# Function to load fresh account settings
+def load_fresh_account_settings():
+    try:
+        if os.path.exists(FRESH_ACCOUNT_FILE):
+            with open(FRESH_ACCOUNT_FILE, 'r') as f:
+                return json.load(f)
+        return {}
+    except Exception as e:
+        print(f"Error loading fresh account settings: {e}")
+        return {}
+
+# Function to save fresh account settings
+def save_fresh_account_settings(data):
+    try:
+        with open(FRESH_ACCOUNT_FILE, 'w') as f:
+            json.dump(data, f, indent=4)
+    except Exception as e:
+        print(f"Error saving fresh account settings: {e}")
+
 # Function to create a backup of all data files
 def create_backup():
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -150,7 +172,8 @@ def create_backup():
         REACTION_ROLES_FILE,
         CUSTOM_COMMANDS_FILE,
         SCHEDULED_TASKS_FILE,
-        TEMP_VOICE_FILE
+        TEMP_VOICE_FILE,
+        FRESH_ACCOUNT_FILE
     ]
     
     for file in files_to_backup:
@@ -196,6 +219,7 @@ custom_commands_data = load_custom_commands()
 scheduled_tasks_data = load_scheduled_tasks()
 temp_voice_data = load_temp_voice()
 nickname_filters_data = load_nickname_filters()
+fresh_account_settings = load_fresh_account_settings()
 
 # Set up intents for the bot
 intents = discord.Intents.default()
@@ -512,8 +536,97 @@ async def on_member_join(member):
     if member.bot:
         return
         
-    # Check nickname against filters
+    # Get guild and member IDs
     guild_id = str(member.guild.id)
+    user_id = str(member.id)
+    
+    # Check account age
+    join_time = datetime.datetime.now(UTC)
+    account_age_days = (join_time - member.created_at).days
+    
+    # Check for fresh account detection settings
+    fresh_account_detected = False
+    if guild_id in fresh_account_settings and fresh_account_settings[guild_id].get("enabled", False):
+        settings = fresh_account_settings[guild_id]
+        age_threshold = settings.get("age_threshold", 7)  # Default 7 days
+        action = settings.get("action", "log")  # Default action is just to log
+        
+        # Check if account is fresh
+        if account_age_days < age_threshold:
+            fresh_account_detected = True
+            
+            # Take configured action
+            if action == "kick":
+                try:
+                    await member.kick(reason=f"Fresh account detection: Account age {account_age_days} days")
+                    
+                    # Log to mod-logs
+                    log_channel = discord.utils.get(member.guild.text_channels, name="mod-logs")
+                    if log_channel:
+                        embed = discord.Embed(
+                            title="🔨 Fresh Account Kicked",
+                            description=f"A fresh Discord account was kicked.",
+                            color=discord.Color.red(),
+                            timestamp=join_time
+                        )
+                        embed.add_field(name="User", value=f"{member} ({member.id})", inline=True)
+                        embed.add_field(name="Account Age", value=f"{account_age_days} days", inline=True)
+                        embed.add_field(name="Threshold", value=f"{age_threshold} days", inline=True)
+                        embed.set_thumbnail(url=member.display_avatar.url)
+                        await log_channel.send(embed=embed)
+                        
+                    # Skip the rest of the function since the user is kicked
+                    return
+                        
+                except Exception as e:
+                    print(f"Error kicking fresh account: {e}")
+            
+            elif action == "quarantine":
+                try:
+                    # Get quarantine channel
+                    quarantine_channel_id = settings.get("quarantine_channel_id")
+                    if quarantine_channel_id:
+                        quarantine_channel = member.guild.get_channel(int(quarantine_channel_id))
+                        if quarantine_channel:
+                            # Set permissions for all channels to deny access
+                            for channel in member.guild.channels:
+                                if channel.id != int(quarantine_channel_id) and isinstance(channel, discord.TextChannel):
+                                    try:
+                                        await channel.set_permissions(member, read_messages=False, send_messages=False,
+                                                                    reason="Fresh account quarantine")
+                                    except:
+                                        pass
+                            
+                            # Allow access to quarantine channel
+                            await quarantine_channel.set_permissions(member, read_messages=True, send_messages=True,
+                                                                  reason="Fresh account quarantine")
+                            
+                            # Send message to quarantine channel
+                            quarantine_message = settings.get("quarantine_message", "Your account is new, so you've been placed in quarantine. Please wait for staff to verify your account.")
+                            await quarantine_channel.send(
+                                f"{member.mention} {quarantine_message}\n\n" +
+                                f"**Account Age:** {account_age_days} days (Threshold: {age_threshold} days)"
+                            )
+                except Exception as e:
+                    print(f"Error quarantining fresh account: {e}")
+            
+            # Always log fresh accounts to mod-logs
+            log_channel = discord.utils.get(member.guild.text_channels, name="mod-logs")
+            if log_channel:
+                embed = discord.Embed(
+                    title="⚠️ Fresh Account Detected",
+                    description=f"A fresh Discord account has joined the server.",
+                    color=discord.Color.gold(),
+                    timestamp=join_time
+                )
+                embed.add_field(name="User", value=f"{member.mention} ({member.id})", inline=True)
+                embed.add_field(name="Account Age", value=f"{account_age_days} days", inline=True)
+                embed.add_field(name="Threshold", value=f"{age_threshold} days", inline=True)
+                embed.add_field(name="Action Taken", value=action.capitalize(), inline=True)
+                embed.set_thumbnail(url=member.display_avatar.url)
+                await log_channel.send(embed=embed)
+    
+    # Check nickname against filters
     if guild_id in nickname_filters_data and "patterns" in nickname_filters_data[guild_id]:
         display_name = member.display_name.lower()
         patterns = nickname_filters_data[guild_id]["patterns"]
@@ -544,8 +657,8 @@ async def on_member_join(member):
                     break
             except:
                 pass  # Invalid regex pattern
-        
-    # Check if anti-raid mode is on
+    
+    # Check if anti-raid mode is enabled
     if getattr(bot, 'antiraid_mode', False):
         # If in anti-raid mode, log the join and consider action
         try:
@@ -579,6 +692,42 @@ async def on_member_join(member):
         embed.set_thumbnail(url=member.display_avatar.url)
         embed.set_footer(text=f"Member #{len(member.guild.members)}")
         await welcome_channel.send(embed=embed)
+
+    # Check server rule agreement system
+    if guild_id in custom_commands_data and "rules_message" in custom_commands_data[guild_id]:
+        # Get the rules message and channel
+        rules_message = custom_commands_data[guild_id]["rules_message"]
+        rules_channel_id = custom_commands_data[guild_id].get("rules_channel")
+        role_id = custom_commands_data[guild_id].get("verified_role")
+        
+        if rules_channel_id and role_id:
+            try:
+                # Get the channel and send the rules message
+                channel = member.guild.get_channel(int(rules_channel_id))
+                if channel:
+                    await channel.send(f"{member.mention} {rules_message}")
+            except Exception as e:
+                print(f"Error sending rules message: {e}")
+    
+    # Always log fresh account actions if enabled
+    if fresh_account_detected:
+        log_channel = discord.utils.get(member.guild.text_channels, name="mod-logs")
+        if log_channel:
+            action = fresh_account_settings[guild_id]["action"]
+            embed = discord.Embed(
+                title="⚠️ Fresh Account Detected",
+                description=f"{member.mention} has a new Discord account.",
+                color=discord.Color.red(),
+                timestamp=join_time
+            )
+            embed.add_field(name="Username", value=str(member), inline=True)
+            embed.add_field(name="ID", value=member.id, inline=True)
+            embed.add_field(name="Account Age", value=f"{account_age_days} days", inline=True)
+            embed.add_field(name="Threshold", value=f"{fresh_account_settings[guild_id]['age_threshold']} days", inline=True)
+            embed.add_field(name="Action Taken", value=action.capitalize(), inline=True)
+            embed.set_thumbnail(url=member.display_avatar.url)
+            
+            await log_channel.send(embed=embed)
 
 # Reaction add event for reaction roles
 @bot.event
@@ -1104,7 +1253,7 @@ async def server_unlock(interaction: discord.Interaction, reason: str = "Lockdow
         for channel in interaction.guild.text_channels:
             try:
                 # Reset permissions
-                await channel.set_permissions(default_role, send_messages=None, reason=f"Server Lockdown Lifted: {reason}")
+                await channel.set_permissions(default_role, send_messages=None, reason="Server Lockdown Lifted: {reason}")
                 unlocked_channels += 1
             except:
                 skipped_channels += 1
@@ -1378,7 +1527,7 @@ async def purgewords(interaction: discord.Interaction, channel: discord.TextChan
             result_color = discord.Color.light_grey()
         else:
             result_title = f"🏁 SUPER SCAN COMPLETE!"
-            result_description = f"**Channel:** {channel.mention}\n**Words:** `{', '.join(search_words)}`"
+            result_description = f"{interaction.user.mention} purged {total_deleted} messages containing target words."
             result_color = discord.Color.green() if total_deleted > 0 else discord.Color.gold()
         
         # Create embed for results
@@ -2886,15 +3035,17 @@ async def category_lock(interaction: discord.Interaction, category: discord.Cate
             await interaction.followup.send(f"No text channels found in category {category.name}.", ephemeral=True)
             return
             
-        # Create lockdown embed
-        lock_embed = discord.Embed(
-            title="🔒 Category Locked",
-            description=f"This category has been locked by {interaction.user.mention}.",
-            color=discord.Color.red()
+        # Create compact, impressive lockdown message
+        lock_message = (
+            "🔒 **CHANNEL LOCKED** 🔒\n\n" +
+            f"This channel has been locked by **{interaction.user.display_name}**\n" +
+            f"**Reason:** {reason}"
         )
-        lock_embed.add_field(name="Reason", value=reason, inline=False)
+        
         if minutes > 0:
-            lock_embed.add_field(name="Duration", value=f"{minutes} minutes", inline=False)
+            lock_message += f"\n**Duration:** {minutes} minutes"
+            
+        lock_message += "\n\n**You cannot send messages until the channel is unlocked.**"
             
         # Lock all channels
         locked_count = 0
@@ -2904,9 +3055,9 @@ async def category_lock(interaction: discord.Interaction, category: discord.Cate
                 await channel.set_permissions(default_role, send_messages=False, reason=f"Category lockdown: {reason}")
                 locked_count += 1
                 
-                # Send notification
+                # Send notification (single message)
                 try:
-                    await channel.send(embed=lock_embed)
+                    await channel.send(lock_message)
                 except:
                     pass
             except:
@@ -2919,11 +3070,11 @@ async def category_lock(interaction: discord.Interaction, category: discord.Cate
         if minutes > 0:
             await asyncio.sleep(minutes * 60)
             
-            # Create unlock embed
-            unlock_embed = discord.Embed(
-                title="🔓 Category Unlocked",
-                description="This category has been automatically unlocked.",
-                color=discord.Color.green()
+            # Create compact unlock message
+            unlock_message = (
+                "🔓 **CHANNEL UNLOCKED** 🔓\n\n" +
+                "This channel has been automatically unlocked.\n" +
+                "**You can now send messages again.**"
             )
             
             # Unlock all channels
@@ -2934,9 +3085,9 @@ async def category_lock(interaction: discord.Interaction, category: discord.Cate
                     await channel.set_permissions(default_role, send_messages=None, reason="Category lockdown expired")
                     unlocked_count += 1
                     
-                    # Send notification
+                    # Send notification (single message)
                     try:
-                        await channel.send(embed=unlock_embed)
+                        await channel.send(unlock_message)
                     except:
                         pass
                 except:
