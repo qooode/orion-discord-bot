@@ -40,10 +40,17 @@ A powerful Discord moderation bot with advanced features and slash commands.
    - Python 3.8 or higher
    - Discord.py 2.0.0 or higher
 
-2. **Installation**:
+2. **Discord Bot Setup**:
+   - Go to [Discord Developer Portal](https://discord.com/developers/applications)
+   - Create a new application and add a bot
+   - Enable all Privileged Gateway Intents (Message Content, Server Members, Presence)
+   - Use the OAuth2 URL Generator to create an invite link with `bot` and `applications.commands` scopes
+   - Select appropriate bot permissions (Administrator recommended for full functionality)
+
+3. **Installation**:
    ```bash
    # Clone the repository
-   git clone https://github.com/yourusername/discord-mod-bot.git
+   git clone https://github.com/qooode/discord-mod-bot.git
    
    # Navigate to the project directory
    cd discord-mod-bot
@@ -52,18 +59,33 @@ A powerful Discord moderation bot with advanced features and slash commands.
    pip install -r requirements.txt
    ```
 
-3. **Configuration**:
-   - Rename `bot.env` to `.env`
-   - Edit `.env` with your Discord bot token
+4. **Configuration**:
+   - Rename `bot.env` to `.env` (or keep as is)
+   - Edit with your Discord bot token
    ```
-   DISCORD_TOKEN=your_token_here
+   DISCORD_TOKEN=your_discord_bot_token_here
    COMMAND_PREFIX=!
    ```
 
-4. **Start the Bot**:
+5. **Running the Bot**:
    ```bash
+   # Simple start
    python bot.py
+   
+   # Alternative: Run in background (Linux/Mac)
+   nohup python bot.py > bot.log 2>&1 &
+   
+   # Alternative: Run with auto-restart (requires nodemon)
+   nodemon bot.py
    ```
+
+6. **First-Time Setup**:
+   - After inviting the bot to your server, use these commands to set up basic functionality:
+     - `/setupvoice` - Set up auto-voice channels
+     - `/nickfilter` - Add nickname filters
+     - `/ratelimit` - Configure anti-spam measures
+   - Create a channel named `mod-logs` for automatic logging
+   - Create a role named `Quarantine` for anti-raid protection
 
 ## Commands
 
