@@ -1170,12 +1170,14 @@ async def antiraid(interaction: discord.Interaction, status: int):
     silent="Optional: Whether to silently delete without showing a report",
     exact_match="Optional: Whether words must match exactly or can be part of other words",
     older_than="Optional: Only scan messages older than this many days",
-    newer_than="Optional: Only scan messages newer than this many days"
+    newer_than="Optional: Only scan messages newer than this many days",
+    report_channel="Optional: Channel to send the complete report to"
 )
 @app_commands.default_permissions(manage_messages=True)
 async def purgewords(interaction: discord.Interaction, channel: discord.TextChannel, words: str, 
                      user: Optional[discord.Member] = None, batch_size: int = 100, silent: bool = False,
-                     exact_match: bool = False, older_than: int = 0, newer_than: int = 0):
+                     exact_match: bool = False, older_than: int = 0, newer_than: int = 0,
+                     report_channel: Optional[discord.TextChannel] = None):
     try:
         # Immediately defer the response as this could take time
         await interaction.response.defer(ephemeral=True)
@@ -1619,42 +1621,84 @@ async def purgewords(interaction: discord.Interaction, channel: discord.TextChan
                     child.disabled = True
                 await button_interaction.response.edit_message(view=self)
         
+        # Create detailed report embed
+        report_embed = discord.Embed(
+            title=f"🧹 Complete Purge Report: Word Filter",
+            description=f"{interaction.user.mention} purged {total_deleted} messages containing target words.",
+            color=discord.Color.red(),
+            timestamp=datetime.datetime.now(UTC)
+        )
+        report_embed.add_field(name="Channel", value=channel.mention, inline=True)
+        report_embed.add_field(name="Target Words", value=f"`{', '.join(search_words)}`", inline=True)
+        report_embed.add_field(name="User Filter", value=user.mention if user else "None", inline=True)
+        report_embed.add_field(name="Total Scanned", value=str(total_scanned), inline=True)
+        report_embed.add_field(name="Total Deleted", value=str(total_deleted), inline=True)
+        report_embed.add_field(name="Match Type", value="Exact word matches" if exact_match else "Contains word", inline=True)
+        
+        # Include date filter info if used
+        if older_than > 0 or newer_than > 0:
+            date_filter = ""
+            if older_than > 0:
+                date_filter += f"> {older_than} days old "
+            if newer_than > 0:
+                date_filter += f"< {newer_than} days old"
+            report_embed.add_field(name="Date Filter", value=date_filter.strip(), inline=True)
+        
+        # Add batch info
+        report_embed.add_field(name="Batches", value=f"{total_batches} batches of {batch_size} messages", inline=True)
+        report_embed.add_field(name="Rate Limits", value=str(rate_limited_count), inline=True)
+        
+        # Add batch details to the report
+        matching_batches = [b for b in batch_stats if b["matched"] > 0]
+        if matching_batches:
+            batch_details = ""
+            for batch in matching_batches[:20]:  # Show more details in the report
+                batch_details += f"**Batch #{batch['batch']}:** Found {batch['matched']}, Deleted {batch['deleted']}\n"
+            
+            if len(matching_batches) > 20:
+                batch_details += f"...and {len(matching_batches) - 20} more batches\n"
+                
+            report_embed.add_field(name="Batch Details", value=batch_details, inline=False)
+        
+        # Add more message samples to the report
+        if message_samples:
+            # First batch of samples
+            if len(message_samples) > 0:
+                samples_part1 = "\n".join(message_samples[:15])
+                if len(samples_part1) > 1024:
+                    samples_part1 = samples_part1[:1020] + "..."
+                report_embed.add_field(name="Message Samples (1/2)", value=samples_part1, inline=False)
+            
+            # Second batch of samples if needed
+            if len(message_samples) > 15:
+                samples_part2 = "\n".join(message_samples[15:30])
+                if len(samples_part2) > 1024:
+                    samples_part2 = samples_part2[:1020] + "..."
+                report_embed.add_field(name="Message Samples (2/2)", value=samples_part2, inline=False)
+        
+        # Send to specified report channel if provided
+        if report_channel:
+            try:
+                await report_channel.send(embed=report_embed)
+            except Exception as e:
+                print(f"Error sending to report channel: {e}")
+                await interaction.followup.send(f"Failed to send report to {report_channel.mention}: {str(e)}", ephemeral=True)
+        
         # Send to mod-logs if available
         try:
             log_channel = discord.utils.get(interaction.guild.text_channels, name="mod-logs")
-            if log_channel:
-                # Create log embed
-                log_embed = discord.Embed(
-                    title=f"🧹 Super Channel Purge: Word Filter",
-                    description=f"{interaction.user.mention} purged {total_deleted} messages containing target words.",
-                    color=discord.Color.red(),
-                    timestamp=datetime.datetime.now(UTC)
-                )
-                log_embed.add_field(name="Channel", value=channel.mention, inline=True)
-                log_embed.add_field(name="Target Words", value=f"`{', '.join(search_words)}`", inline=True)
-                log_embed.add_field(name="User Filter", value=user.mention if user else "None", inline=True)
-                log_embed.add_field(name="Total Scanned", value=str(total_scanned), inline=True)
-                log_embed.add_field(name="Total Deleted", value=str(total_deleted), inline=True)
-                log_embed.add_field(name="Match Type", value="Exact word matches" if exact_match else "Contains word", inline=True)
-                
-                # Include date filter info if used
-                if older_than > 0 or newer_than > 0:
-                    date_filter = ""
-                    if older_than > 0:
-                        date_filter += f"> {older_than} days old "
-                    if newer_than > 0:
-                        date_filter += f"< {newer_than} days old"
-                    log_embed.add_field(name="Date Filter", value=date_filter.strip(), inline=True)
-                
-                # Add batch info
-                log_embed.add_field(name="Batches", value=f"{total_batches} batches of {batch_size} messages", inline=True)
-                
-                # Add sample of deleted messages if not too many
-                if message_samples and not silent:
-                    samples = "\n".join(message_samples[:15])
-                    if len(samples) > 1024:
-                        samples = samples[:1020] + "..."
-                    log_embed.add_field(name="Sample Deleted Messages", value=samples, inline=False)
+            if log_channel and (not report_channel or log_channel.id != report_channel.id):
+                # Create a simplified log embed if we're already sending the full report elsewhere
+                if report_channel:
+                    log_embed = discord.Embed(
+                        title=f"🧹 Channel Purge Completed",
+                        description=f"{interaction.user.mention} purged {total_deleted} messages in {channel.mention}.\n\n**Full report sent to:** {report_channel.mention}",
+                        color=discord.Color.red(),
+                        timestamp=datetime.datetime.now(UTC)
+                    )
+                else:
+                    # If no report channel, send the full report to mod-logs
+                    log_embed = report_embed.copy()
                 
                 await log_channel.send(embed=log_embed)
         except Exception as e:
