@@ -50,10 +50,10 @@ A powerful Discord moderation bot with advanced features and slash commands.
 3. **Installation**:
    ```bash
    # Clone the repository
-   git clone https://github.com/qooode/discord-mod-bot.git
+   git clone https://github.com/qooode/orion-discord-bot.git
    
    # Navigate to the project directory
-   cd discord-mod-bot
+   cd orion-discord-bot
    
    # Install dependencies
    pip install -r requirements.txt
