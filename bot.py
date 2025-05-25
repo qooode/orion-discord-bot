@@ -1779,7 +1779,7 @@ async def masskick(interaction: discord.Interaction, members: str, reason: str =
         await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
 
 # Role management commands
-@bot.tree.command(name="addrole", description="Add a role to a member")
+@bot.tree.command(name="giverole", description="Add a role to a member")
 @app_commands.describe(
     member="The member to add the role to",
     role="The role to add"
