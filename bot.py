@@ -1102,6 +1102,116 @@ async def antiraid(interaction: discord.Interaction, status: int):
         await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
 
 # Mass moderation commands
+@bot.tree.command(name="purgewords", description="Delete all messages containing specific words in a channel")
+@app_commands.describe(
+    channel="The channel to scan", 
+    words="Words to search for (space separated)", 
+    user="Optional: Only delete messages from this user",
+    limit="Optional: Maximum number of messages to scan (0 for all retrievable messages)",
+    silent="Optional: Whether to silently delete without showing a report"
+)
+@app_commands.default_permissions(manage_messages=True)
+async def purgewords(interaction: discord.Interaction, channel: discord.TextChannel, words: str, 
+                     user: Optional[discord.Member] = None, limit: int = 1000, silent: bool = False):
+    try:
+        # Immediately defer the response as this could take time
+        await interaction.response.defer(ephemeral=True)
+        
+        # Parse the words to search for
+        search_words = [word.lower().strip() for word in words.split() if word.strip()]
+        
+        if not search_words:
+            await interaction.followup.send("Please provide at least one word to search for.", ephemeral=True)
+            return
+            
+        # Validate limit
+        if limit <= 0:
+            limit = None  # Will retrieve all possible messages
+            
+        # Create progress message
+        progress = await interaction.followup.send(f"Scanning messages in {channel.mention} for: `{', '.join(search_words)}`...", ephemeral=True)
+        
+        # Keep track of deleted messages
+        deleted_count = 0
+        scanned_count = 0
+        matched_messages = []
+        last_report_time = datetime.datetime.now()
+        
+        # Create a log entry
+        log_entry = f"Deleted messages containing: {', '.join(search_words)}\n"
+        log_entry += f"Channel: {channel.name} ({channel.id})\n"
+        if user:
+            log_entry += f"User filter: {user.display_name} ({user.id})\n"
+        log_entry += "---\n"
+        
+        # Iterate through messages in the channel
+        async for message in channel.history(limit=limit):
+            scanned_count += 1
+            
+            # Check if message is from the specified user (if any)
+            if user and message.author != user:
+                continue
+                
+            # Check message content for the words
+            content = message.content.lower()
+            if any(word in content for word in search_words):
+                # Keep track of deleted message content for logs
+                msg_info = f"[{message.author.display_name}]: {message.content[:100]}"
+                if len(message.content) > 100:
+                    msg_info += "..."
+                matched_messages.append(msg_info)
+                log_entry += msg_info + "\n"
+                
+                # Delete the message
+                await message.delete()
+                deleted_count += 1
+                
+                # Update progress every 5 messages or 3 seconds
+                now = datetime.datetime.now()
+                if deleted_count % 5 == 0 or (now - last_report_time).total_seconds() > 3:
+                    await progress.edit(content=f"Scanning... Found {deleted_count} messages containing target words (scanned {scanned_count} so far).")
+                    last_report_time = now
+        
+        # Create final report
+        report = f"✅ Scan complete! Deleted {deleted_count} messages containing target words.\n"
+        report += f"Scanned a total of {scanned_count} messages in {channel.mention}.\n"
+        
+        # Send to mod-logs if available
+        try:
+            log_channel = discord.utils.get(interaction.guild.text_channels, name="mod-logs")
+            if log_channel:
+                # Create log embed
+                log_embed = discord.Embed(
+                    title=f"Channel Purge: Word Filter",
+                    description=f"{interaction.user.mention} purged {deleted_count} messages containing target words.",
+                    color=discord.Color.red(),
+                    timestamp=discord.utils.utcnow()
+                )
+                log_embed.add_field(name="Channel", value=channel.mention, inline=True)
+                log_embed.add_field(name="Target Words", value=f"`{', '.join(search_words)}`", inline=True)
+                log_embed.add_field(name="User Filter", value=user.mention if user else "None", inline=True)
+                log_embed.add_field(name="Messages Scanned", value=str(scanned_count), inline=True)
+                log_embed.add_field(name="Messages Deleted", value=str(deleted_count), inline=True)
+                
+                # Add sample of deleted messages if not too many
+                if deleted_count > 0 and deleted_count <= 15 and not silent:
+                    samples = "\n".join(matched_messages[:15])
+                    if len(samples) > 1024:
+                        samples = samples[:1020] + "..."
+                    log_embed.add_field(name="Sample Deleted Messages", value=samples, inline=False)
+                
+                await log_channel.send(embed=log_embed)
+        except Exception as e:
+            print(f"Error sending purge log: {e}")
+        
+        # Send final report to user
+        await progress.edit(content=report)
+        
+    except discord.Forbidden:
+        await interaction.followup.send("I don't have permission to delete messages in that channel.", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
+
 @bot.tree.command(name="massban", description="Ban multiple users at once by ID")
 @app_commands.describe(user_ids="User IDs separated by spaces", reason="Reason for the ban", delete_days="Number of days of messages to delete")
 @app_commands.default_permissions(administrator=True)
