@@ -4,20 +4,35 @@ A powerful Discord moderation bot with advanced features and slash commands.
 
 ## Features
 
+### Core Features
 - **Slash Command Interface**: All commands use Discord's `/` command system
 - **Advanced Moderation Tools**: Kick, ban, mute, warn, lockdown and more
 - **Mass-Moderation**: Ban or kick multiple users at once
 - **Auto-Moderation**: Bad word filtering with automatic warnings
 - **Warning System**: Persistent warning storage with automatic actions
+
+### Emergency & Protection Features
 - **Server Lockdown**: Emergency controls to lock the entire server
 - **Raid Protection**: Tools to prevent and mitigate raids
+- **Rate Limiting**: Prevent spam with configurable message rate limits
+- **Nickname Filters**: Auto-rename users with inappropriate nicknames
+
+### Content Scanning & Cleanup
+- **Word Purge**: Delete all messages containing specific words
+- **Regex Scanning**: Find messages matching complex patterns
+- **Thread Management**: Bulk archive inactive threads
+- **Message Logging**: Track deleted messages for moderation purposes
+
+### User Engagement Features
 - **User Information**: Detailed user statistics and warning history
 - **Reaction Roles**: Self-assignable roles through reactions
-- **Message Logging**: Track deleted messages for moderation purposes
 - **Custom Commands**: Create server-specific commands with optional embeds
 - **Scheduled Actions**: Set reminders and temporary bans with auto-expiration
 - **Temp Voice Channels**: Users can create and manage their own voice channels
+
+### System Features
 - **Automatic Backups**: Bot creates regular backups of all data files
+- **JSON Data Storage**: Simple, persistent storage for all bot data
 
 ## Setup
 
@@ -100,4 +115,4 @@ For any issues or suggestions, please open an issue on the GitHub repository.
 
 ---
 
-Made with ❤️ by YOUR_NAME_HERE
+Made with ❤️ by qooode
