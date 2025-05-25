@@ -164,12 +164,35 @@ def create_backup():
     print(f"Backup created at {backup_path}")
     return backup_path
 
+# File to store nickname filters
+NICKNAME_FILTER_FILE = 'nickname_filters.json'
+
+# Function to load nickname filters
+def load_nickname_filters():
+    try:
+        if os.path.exists(NICKNAME_FILTER_FILE):
+            with open(NICKNAME_FILTER_FILE, 'r') as f:
+                return json.load(f)
+        return {}
+    except Exception as e:
+        print(f"Error loading nickname filters: {e}")
+        return {}
+
+# Function to save nickname filters
+def save_nickname_filters(data):
+    try:
+        with open(NICKNAME_FILTER_FILE, 'w') as f:
+            json.dump(data, f, indent=4)
+    except Exception as e:
+        print(f"Error saving nickname filters: {e}")
+
 # Initialize data stores
 warnings_data = load_warnings()
 reaction_roles_data = load_reaction_roles()
 custom_commands_data = load_custom_commands()
 scheduled_tasks_data = load_scheduled_tasks()
 temp_voice_data = load_temp_voice()
+nickname_filters_data = load_nickname_filters()
 
 # Set up intents for the bot
 intents = discord.Intents.default()
@@ -485,6 +508,39 @@ async def on_member_join(member):
     # Skip if bot
     if member.bot:
         return
+        
+    # Check nickname against filters
+    guild_id = str(member.guild.id)
+    if guild_id in nickname_filters_data and "patterns" in nickname_filters_data[guild_id]:
+        display_name = member.display_name.lower()
+        patterns = nickname_filters_data[guild_id]["patterns"]
+        
+        # Check for nickname violations
+        for pattern in patterns:
+            try:
+                if re.search(pattern.lower(), display_name):
+                    # Found a match, apply the default nickname
+                    default_nick = nickname_filters_data[guild_id].get("default", f"User-{member.discriminator}")
+                    try:
+                        await member.edit(nick=default_nick, reason="Automated nickname filter")
+                        
+                        # Log to mod-logs
+                        log_channel = discord.utils.get(member.guild.text_channels, name="mod-logs")
+                        if log_channel:
+                            embed = discord.Embed(
+                                title="Nickname Filter Applied",
+                                description=f"Changed {member.mention}'s nickname due to filter match.",
+                                color=discord.Color.blue()
+                            )
+                            embed.add_field(name="Original Name", value=member.name, inline=True)
+                            embed.add_field(name="New Nickname", value=default_nick, inline=True)
+                            embed.add_field(name="Matched Pattern", value=f"`{pattern}`", inline=True)
+                            await log_channel.send(embed=embed)
+                    except:
+                        pass  # Couldn't change nickname
+                    break
+            except:
+                pass  # Invalid regex pattern
         
     # Check if anti-raid mode is on
     if getattr(bot, 'antiraid_mode', False):
@@ -1744,6 +1800,323 @@ async def voiceunlock(interaction: discord.Interaction):
     except Exception as e:
         await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
 
+# Nickname filter commands
+@bot.tree.command(name="nickfilter", description="Add a regex pattern to filter nicknames")
+@app_commands.describe(
+    pattern="Regex pattern to filter (e.g. 'bad.*word')",
+    default_nickname="Default nickname to apply when filter matches (leave empty for User-0000 format)"
+)
+@app_commands.default_permissions(manage_nicknames=True)
+async def nickfilter(interaction: discord.Interaction, pattern: str, default_nickname: str = ""):
+    try:
+        # Test if the pattern is valid regex
+        try:
+            re.compile(pattern)
+        except re.error:
+            await interaction.response.send_message(f"Invalid regex pattern: `{pattern}`", ephemeral=True)
+            return
+        
+        # Initialize guild data if not exists
+        guild_id = str(interaction.guild.id)
+        if guild_id not in nickname_filters_data:
+            nickname_filters_data[guild_id] = {
+                "patterns": [],
+                "default": "User-0000"
+            }
+        
+        # Set default nickname if provided
+        if default_nickname:
+            nickname_filters_data[guild_id]["default"] = default_nickname
+            
+        # Add pattern if not already exists
+        if pattern not in nickname_filters_data[guild_id]["patterns"]:
+            nickname_filters_data[guild_id]["patterns"].append(pattern)
+            save_nickname_filters(nickname_filters_data)
+            await interaction.response.send_message(f"Added nickname filter: `{pattern}`", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"This pattern is already in the filter list.", ephemeral=True)
+            
+    except Exception as e:
+        await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
+
+@bot.tree.command(name="nickfilters", description="List all nickname filters")
+@app_commands.default_permissions(manage_nicknames=True)
+async def nickfilters(interaction: discord.Interaction):
+    try:
+        guild_id = str(interaction.guild.id)
+        if guild_id not in nickname_filters_data or "patterns" not in nickname_filters_data[guild_id] or not nickname_filters_data[guild_id]["patterns"]:
+            await interaction.response.send_message("No nickname filters have been set up yet.", ephemeral=True)
+            return
+            
+        # Get default nickname
+        default = nickname_filters_data[guild_id].get("default", "User-0000")
+        
+        # Create embed
+        embed = discord.Embed(
+            title="Nickname Filters",
+            description=f"These patterns will be filtered from nicknames.\nDefault replacement: `{default}`",
+            color=discord.Color.blue()
+        )
+        
+        # Add patterns
+        patterns = nickname_filters_data[guild_id]["patterns"]
+        pattern_list = "\n".join([f"`{i+1}.` `{p}`" for i, p in enumerate(patterns)])
+        embed.add_field(name=f"Filter Patterns [{len(patterns)}]", value=pattern_list, inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+            
+    except Exception as e:
+        await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
+
+@bot.tree.command(name="nickfilterremove", description="Remove a nickname filter pattern")
+@app_commands.describe(pattern_number="Pattern number to remove (use /nickfilters to see numbers)")
+@app_commands.default_permissions(manage_nicknames=True)
+async def nickfilterremove(interaction: discord.Interaction, pattern_number: int):
+    try:
+        guild_id = str(interaction.guild.id)
+        if guild_id not in nickname_filters_data or "patterns" not in nickname_filters_data[guild_id] or not nickname_filters_data[guild_id]["patterns"]:
+            await interaction.response.send_message("No nickname filters have been set up yet.", ephemeral=True)
+            return
+            
+        patterns = nickname_filters_data[guild_id]["patterns"]
+        
+        # Check valid index
+        if pattern_number < 1 or pattern_number > len(patterns):
+            await interaction.response.send_message(f"Invalid pattern number. Use /nickfilters to see valid numbers.", ephemeral=True)
+            return
+            
+        # Remove pattern
+        removed = patterns.pop(pattern_number - 1)
+        save_nickname_filters(nickname_filters_data)
+        
+        await interaction.response.send_message(f"Removed nickname filter: `{removed}`", ephemeral=True)
+            
+    except Exception as e:
+        await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
+
+# Pattern scanning command (advanced regex search)
+@bot.tree.command(name="regex", description="Scan and delete messages matching a regex pattern")
+@app_commands.describe(
+    channel="The channel to scan",
+    pattern="Regex pattern to search for",
+    user="Optional: Only scan messages from this user",
+    limit="Optional: Maximum number of messages to scan (0 for all retrievable messages)",
+    action="Action to take on matching messages"
+)
+@app_commands.choices(action=[
+    app_commands.Choice(name="Delete", value="delete"),
+    app_commands.Choice(name="Report only", value="report")
+])
+@app_commands.default_permissions(manage_messages=True)
+async def regex(interaction: discord.Interaction, channel: discord.TextChannel, pattern: str, 
+               user: Optional[discord.Member] = None, limit: int = 1000, 
+               action: str = "report"):
+    try:
+        # Verify regex pattern
+        try:
+            regex = re.compile(pattern)
+        except re.error as e:
+            await interaction.response.send_message(f"Invalid regex pattern: {str(e)}", ephemeral=True)
+            return
+            
+        # Defer response for long operation
+        await interaction.response.defer(ephemeral=True)
+        
+        # Validate limit
+        if limit <= 0:
+            limit = None  # Will retrieve all possible messages
+            
+        # Create progress message
+        progress = await interaction.followup.send(f"Scanning messages in {channel.mention} for pattern: `{pattern}`...", ephemeral=True)
+        
+        # Track messages
+        matched_count = 0
+        deleted_count = 0
+        scanned_count = 0
+        matched_messages = []
+        last_report_time = datetime.datetime.now()
+        
+        # Scan messages
+        async for message in channel.history(limit=limit):
+            scanned_count += 1
+            
+            # Skip messages from non-target user if specified
+            if user and message.author != user:
+                continue
+                
+            # Apply regex pattern
+            content = message.content
+            if regex.search(content):
+                matched_count += 1
+                
+                # Create message info for logs
+                msg_info = f"[{message.author.display_name}]: {message.content[:100]}"
+                if len(message.content) > 100:
+                    msg_info += "..."
+                matched_messages.append(msg_info)
+                
+                # Delete if action is delete
+                if action == "delete":
+                    try:
+                        await message.delete()
+                        deleted_count += 1
+                    except:
+                        pass
+                
+                # Update progress periodically
+                now = datetime.datetime.now()
+                if matched_count % 5 == 0 or (now - last_report_time).total_seconds() > 3:
+                    status = f"Scanning... Found {matched_count} matches"
+                    if action == "delete":
+                        status += f", deleted {deleted_count}"
+                    status += f" (scanned {scanned_count} messages so far)."
+                    await progress.edit(content=status)
+                    last_report_time = now
+        
+        # Create final report
+        if action == "delete":
+            report = f"✅ Scan complete! Found {matched_count} matches and deleted {deleted_count} messages.\n"
+        else:
+            report = f"✅ Scan complete! Found {matched_count} matches.\n"
+        report += f"Scanned a total of {scanned_count} messages in {channel.mention}.\n"
+        
+        # Send to mod-logs if available
+        try:
+            log_channel = discord.utils.get(interaction.guild.text_channels, name="mod-logs")
+            if log_channel:
+                # Create log embed
+                log_embed = discord.Embed(
+                    title=f"Regex Pattern Scan",
+                    description=f"{interaction.user.mention} scanned for regex pattern in {channel.mention}.",
+                    color=discord.Color.blue() if action == "report" else discord.Color.red(),
+                    timestamp=discord.utils.utcnow()
+                )
+                log_embed.add_field(name="Pattern", value=f"`{pattern}`", inline=True)
+                log_embed.add_field(name="Action", value=action.capitalize(), inline=True)
+                log_embed.add_field(name="User Filter", value=user.mention if user else "None", inline=True)
+                log_embed.add_field(name="Messages Scanned", value=str(scanned_count), inline=True)
+                log_embed.add_field(name="Matches Found", value=str(matched_count), inline=True)
+                if action == "delete":
+                    log_embed.add_field(name="Messages Deleted", value=str(deleted_count), inline=True)
+                
+                # Add sample of matched messages if not too many
+                if matched_count > 0 and matched_count <= 15:
+                    samples = "\n".join(matched_messages[:15])
+                    if len(samples) > 1024:
+                        samples = samples[:1020] + "..."
+                    log_embed.add_field(name="Sample Matched Messages", value=samples, inline=False)
+                
+                await log_channel.send(embed=embed)
+        except Exception as e:
+            print(f"Error sending regex scan log: {e}")
+        
+        # Send final report to user
+        await progress.edit(content=report)
+            
+    except Exception as e:
+        await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
+
+# Thread management commands
+@bot.tree.command(name="archivethreads", description="Archive all inactive threads in a channel or category")
+@app_commands.describe(
+    channel="Channel to archive threads in (use None for all channels in category)",
+    category="Category to archive threads in (ignored if channel is specified)",
+    inactive_hours="Hours of inactivity before archiving (0 to archive all)"
+)
+@app_commands.default_permissions(manage_threads=True)
+async def archivethreads(interaction: discord.Interaction, channel: Optional[discord.TextChannel] = None,
+                       category: Optional[discord.CategoryChannel] = None, inactive_hours: int = 24):
+    try:
+        await interaction.response.defer(ephemeral=True)
+        
+        # Determine target channels
+        target_channels = []
+        
+        if channel:
+            target_channels = [channel]
+        elif category:
+            target_channels = [ch for ch in category.text_channels if isinstance(ch, discord.TextChannel)]
+        else:
+            await interaction.followup.send("Please specify either a channel or a category.", ephemeral=True)
+            return
+            
+        if not target_channels:
+            await interaction.followup.send("No valid text channels found in the specified category.", ephemeral=True)
+            return
+            
+        # Define inactive threshold
+        if inactive_hours > 0:
+            inactive_threshold = discord.utils.utcnow() - datetime.timedelta(hours=inactive_hours)
+        else:
+            inactive_threshold = None
+            
+        # Track results
+        archived_threads = 0
+        total_threads = 0
+        
+        # Process threads in each channel
+        for ch in target_channels:
+            # Get active threads
+            try:
+                active_threads = [t for t in await ch.active_threads() if isinstance(t, discord.Thread)]
+                total_threads += len(active_threads)
+                
+                # Archive threads that meet criteria
+                for thread in active_threads:
+                    if inactive_threshold is None or thread.last_message_id is None or \
+                       (thread.last_message_id and \
+                        discord.utils.snowflake_time(thread.last_message_id) < inactive_threshold):
+                        await thread.edit(archived=True, reason=f"Bulk archive by {interaction.user.display_name}")
+                        archived_threads += 1
+            except Exception as e:
+                print(f"Error processing threads in {ch.name}: {e}")
+                
+        # Send results
+        if total_threads == 0:
+            await interaction.followup.send(f"No active threads found in the specified channels.", ephemeral=True)
+        else:
+            await interaction.followup.send(f"Archived {archived_threads} out of {total_threads} threads.", ephemeral=True)
+            
+    except Exception as e:
+        await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
+
+# Message frequency limiter (anti-spam)
+@bot.tree.command(name="ratelimit", description="Set message rate limits to prevent spam")
+@app_commands.describe(
+    messages="Number of messages that trigger the limit",
+    seconds="Time window in seconds",
+    action="Action to take when limit is reached"
+)
+@app_commands.choices(action=[
+    app_commands.Choice(name="Warn", value="warn"),
+    app_commands.Choice(name="Mute", value="mute"),
+    app_commands.Choice(name="Kick", value="kick")
+])
+@app_commands.default_permissions(administrator=True)
+async def ratelimit(interaction: discord.Interaction, messages: int, seconds: int, action: str = "warn"):
+    try:
+        if messages < 3 or seconds < 1 or seconds > 300:
+            await interaction.response.send_message("Please use reasonable values: messages (3+) and seconds (1-300).", ephemeral=True)
+            return
+            
+        # Store rate limit settings as bot attributes
+        bot.rate_limit = {
+            "messages": messages,
+            "seconds": seconds,
+            "action": action,
+            "tracking": {}
+        }
+        
+        # Format action for display
+        action_text = action.capitalize()
+        if action == "mute":
+            action_text += " for 10 minutes"
+            
+        await interaction.response.send_message(f"Rate limit set: {messages} messages in {seconds} seconds will trigger: {action_text}", ephemeral=False)
+            
+    except Exception as e:
+        await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
+
 # Run the bot
 if __name__ == "__main__":
     # Check if token is available
@@ -1754,5 +2127,6 @@ if __name__ == "__main__":
     # Attach attributes to bot
     bot.antiraid_mode = False
     bot.server_lockdown = False
+    bot.rate_limit = None
         
     bot.run(TOKEN)
