@@ -9,6 +9,9 @@ from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
+# Define UTC timezone constant to fix deprecation warnings
+UTC = datetime.timezone.utc
+
 # Load environment variables from .env file
 load_dotenv('bot.env')
 
@@ -255,7 +258,7 @@ async def scheduled_backup():
 async def check_scheduled_tasks():
     while True:
         await asyncio.sleep(60)  # Check every minute
-        current_time = datetime.datetime.utcnow()
+        current_time = datetime.datetime.now(UTC)
         tasks_to_remove = []
         
         for i, task in enumerate(scheduled_tasks_data):
@@ -352,7 +355,7 @@ async def on_voice_state_update(member, before, after):
                 
                 temp_voice_data[guild_id]["temp_channels"][str(new_channel.id)] = {
                     "owner": str(member.id),
-                    "created_at": str(datetime.datetime.utcnow())
+                    "created_at": str(datetime.datetime.now(UTC))
                 }
                 save_temp_voice(temp_voice_data)
                 
@@ -416,7 +419,7 @@ async def on_message(message):
         # Add the warning
         warning = {
             "reason": "Automatic warning for inappropriate language",
-            "timestamp": str(datetime.datetime.utcnow()),
+            "timestamp": str(datetime.datetime.now(UTC)),
             "moderator": str(bot.user.id)
         }
         warnings_data[guild_id][user_id].append(warning)
@@ -490,7 +493,7 @@ async def on_message(message):
         # Add the warning
         warning = {
             "reason": "Automatic warning for inappropriate language",
-            "timestamp": str(datetime.datetime.utcnow()),
+            "timestamp": str(datetime.datetime.now(UTC)),
             "moderator": str(bot.user.id)
         }
         warnings_data[guild_id][user_id].append(warning)
@@ -730,7 +733,7 @@ async def warn(interaction: discord.Interaction, member: discord.Member, reason:
         # Add the warning
         warning = {
             "reason": reason,
-            "timestamp": str(datetime.datetime.utcnow()),
+            "timestamp": str(datetime.datetime.now(UTC)),
             "moderator": str(interaction.user.id)
         }
         warnings_data[guild_id][user_id].append(warning)
@@ -1378,6 +1381,308 @@ async def masskick(interaction: discord.Interaction, members: str, reason: str =
     except Exception as e:
         await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
 
+# Role management commands
+@bot.tree.command(name="addrole", description="Add a role to a member")
+@app_commands.describe(
+    member="The member to add the role to",
+    role="The role to add"
+)
+@app_commands.default_permissions(manage_roles=True)
+async def add_role(interaction: discord.Interaction, member: discord.Member, role: discord.Role):
+    try:
+        # Check permissions
+        if role >= interaction.user.top_role and interaction.user.id != interaction.guild.owner_id:
+            await interaction.response.send_message("You cannot add a role higher than or equal to your highest role.", ephemeral=True)
+            return
+            
+        if role >= interaction.guild.me.top_role:
+            await interaction.response.send_message("I cannot add a role higher than or equal to my highest role.", ephemeral=True)
+            return
+            
+        # Add the role
+        await member.add_roles(role, reason=f"Role added by {interaction.user.display_name}")
+        
+        await interaction.response.send_message(f"Added {role.mention} to {member.mention}.", ephemeral=False)
+            
+    except discord.Forbidden:
+        await interaction.response.send_message("I don't have permission to manage roles.", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
+
+@bot.tree.command(name="removerole", description="Remove a role from a member")
+@app_commands.describe(
+    member="The member to remove the role from",
+    role="The role to remove"
+)
+@app_commands.default_permissions(manage_roles=True)
+async def remove_role(interaction: discord.Interaction, member: discord.Member, role: discord.Role):
+    try:
+        # Check permissions
+        if role >= interaction.user.top_role and interaction.user.id != interaction.guild.owner_id:
+            await interaction.response.send_message("You cannot remove a role higher than or equal to your highest role.", ephemeral=True)
+            return
+            
+        if role >= interaction.guild.me.top_role:
+            await interaction.response.send_message("I cannot remove a role higher than or equal to my highest role.", ephemeral=True)
+            return
+            
+        # Check if user has the role
+        if role not in member.roles:
+            await interaction.response.send_message(f"{member.mention} does not have the role {role.mention}.", ephemeral=True)
+            return
+            
+        # Remove the role
+        await member.remove_roles(role, reason=f"Role removed by {interaction.user.display_name}")
+        
+        await interaction.response.send_message(f"Removed {role.mention} from {member.mention}.", ephemeral=False)
+            
+    except discord.Forbidden:
+        await interaction.response.send_message("I don't have permission to manage roles.", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
+
+@bot.tree.command(name="roleall", description="Add a role to all members (USE WITH CAUTION)")
+@app_commands.describe(
+    role="The role to add to everyone",
+    reason="Reason for adding this role to everyone"
+)
+@app_commands.default_permissions(administrator=True)
+async def role_all(interaction: discord.Interaction, role: discord.Role, reason: str):
+    try:
+        await interaction.response.defer(ephemeral=True)
+        
+        # Safety check - require explicit confirmation
+        confirm_msg = await interaction.followup.send(
+            f"⚠️ **CAUTION**: You are about to add {role.mention} to **ALL** members in the server.\n\n"
+            f"This will affect {len(interaction.guild.members)} members and cannot be easily undone.\n\n"
+            f"**Reason provided**: {reason}\n\n"
+            f"Are you ABSOLUTELY sure you want to continue? Reply with 'YES I CONFIRM' to proceed.",
+            ephemeral=True
+        )
+        
+        # Wait for confirmation
+        try:
+            def check(m):
+                return m.author.id == interaction.user.id and m.content == "YES I CONFIRM" and m.channel.id == interaction.channel.id
+            
+            await bot.wait_for("message", check=check, timeout=30.0)
+            
+            # User confirmed, proceed with role addition
+            progress_msg = await interaction.followup.send("Beginning role assignment...", ephemeral=True)
+            
+            success_count = 0
+            fail_count = 0
+            start_time = datetime.datetime.now()
+            
+            for i, member in enumerate(interaction.guild.members):
+                if role not in member.roles:
+                    try:
+                        await member.add_roles(role, reason=f"Mass role assignment: {reason}")
+                        success_count += 1
+                    except:
+                        fail_count += 1
+                        
+                # Update progress every 10 members or 5 seconds
+                if i % 10 == 0 or (datetime.datetime.now() - start_time).total_seconds() > 5:
+                    await progress_msg.edit(content=f"Processing... Added role to {success_count} members. Failed: {fail_count}")
+                    start_time = datetime.datetime.now()
+                    
+            await progress_msg.edit(content=f"✅ Role assignment complete! Added {role.mention} to {success_count} members. Failed: {fail_count}")
+            
+            # Log to mod-logs
+            try:
+                log_channel = discord.utils.get(interaction.guild.text_channels, name="mod-logs")
+                if log_channel:
+                    log_embed = discord.Embed(
+                        title="Mass Role Assignment",
+                        description=f"{interaction.user.mention} added {role.mention} to all members.",
+                        color=discord.Color.blue(),
+                        timestamp=datetime.datetime.now(UTC)
+                    )
+                    log_embed.add_field(name="Reason", value=reason, inline=False)
+                    log_embed.add_field(name="Success", value=str(success_count), inline=True)
+                    log_embed.add_field(name="Failed", value=str(fail_count), inline=True)
+                    await log_channel.send(embed=log_embed)
+            except:
+                pass
+                
+        except asyncio.TimeoutError:
+            await interaction.followup.send("Operation cancelled due to timeout.", ephemeral=True)
+            
+    except Exception as e:
+        await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
+
+@bot.tree.command(name="clean", description="Delete messages matching specific criteria")
+@app_commands.describe(
+    amount="Number of messages to check",
+    type="Type of messages to delete",
+    channel="Channel to clean (defaults to current channel)"
+)
+@app_commands.choices(type=[
+    app_commands.Choice(name="All", value="all"),
+    app_commands.Choice(name="Bot messages", value="bot"),
+    app_commands.Choice(name="User messages", value="user"),
+    app_commands.Choice(name="Embeds", value="embed"),
+    app_commands.Choice(name="Files/Attachments", value="file"),
+    app_commands.Choice(name="Links", value="link"),
+    app_commands.Choice(name="Invites", value="invite")
+])
+@app_commands.default_permissions(manage_messages=True)
+async def clean(interaction: discord.Interaction, amount: int = 10, type: str = "all", 
+                channel: Optional[discord.TextChannel] = None):
+    try:
+        # Validate amount
+        if amount <= 0 or amount > 1000:
+            await interaction.response.send_message("Please provide a valid amount between 1 and 1000.", ephemeral=True)
+            return
+            
+        # Determine target channel
+        target_channel = channel or interaction.channel
+        
+        # Defer response for long operation
+        await interaction.response.defer(ephemeral=True)
+        
+        # Create progress message
+        progress = await interaction.followup.send(f"Searching for messages to delete in {target_channel.mention}...", ephemeral=True)
+        
+        # Define the filter based on type
+        def message_filter(message):
+            if type == "all":
+                return True
+            elif type == "bot":
+                return message.author.bot
+            elif type == "user":
+                return not message.author.bot
+            elif type == "embed":
+                return len(message.embeds) > 0
+            elif type == "file":
+                return len(message.attachments) > 0
+            elif type == "link":
+                # Simple link detection regex
+                return bool(re.search(r'https?://\S+', message.content))
+            elif type == "invite":
+                # Discord invite link detection
+                return bool(re.search(r'discord(?:\.gg|app\.com/invite)/[a-zA-Z0-9]+', message.content))
+            return False
+            
+        # Get messages and filter them
+        deleted_count = 0
+        last_report_time = datetime.datetime.now()
+        
+        async for message in target_channel.history(limit=amount):
+            if message_filter(message):
+                try:
+                    await message.delete()
+                    deleted_count += 1
+                    
+                    # Update progress periodically
+                    now = datetime.datetime.now()
+                    if deleted_count % 5 == 0 or (now - last_report_time).total_seconds() > 3:
+                        await progress.edit(content=f"Deleting messages... Removed {deleted_count} so far.")
+                        last_report_time = now
+                except:
+                    pass
+                    
+        # Create final report
+        await progress.edit(content=f"✅ Clean complete! Deleted {deleted_count} messages matching criteria: {type}.")
+        
+        # Log to mod-logs
+        try:
+            log_channel = discord.utils.get(interaction.guild.text_channels, name="mod-logs")
+            if log_channel:
+                log_embed = discord.Embed(
+                    title="Channel Cleaned",
+                    description=f"{interaction.user.mention} cleaned {target_channel.mention}.",
+                    color=discord.Color.blue(),
+                    timestamp=datetime.datetime.now(UTC)
+                )
+                log_embed.add_field(name="Filter", value=type, inline=True)
+                log_embed.add_field(name="Deleted", value=str(deleted_count), inline=True)
+                await log_channel.send(embed=log_embed)
+        except:
+            pass
+            
+    except discord.Forbidden:
+        await interaction.followup.send("I don't have permission to delete messages in that channel.", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
+
+@bot.tree.command(name="idcheck", description="Check information about a user ID")
+@app_commands.describe(user_id="The Discord user ID to check")
+@app_commands.default_permissions(kick_members=True)
+async def id_check(interaction: discord.Interaction, user_id: str):
+    try:
+        # Validate the ID
+        try:
+            user_id = int(user_id.strip())
+        except ValueError:
+            await interaction.response.send_message("Please provide a valid Discord user ID (a number).", ephemeral=True)
+            return
+            
+        # Create embed
+        embed = discord.Embed(
+            title=f"User ID Check: {user_id}",
+            color=discord.Color.blue()
+        )
+        
+        # Try to get user from client cache
+        user = bot.get_user(user_id)
+        member = interaction.guild.get_member(user_id)
+        
+        # Check for user in cache
+        if user:
+            embed.description = f"User found: {user.mention}"
+            embed.set_thumbnail(url=user.display_avatar.url)
+            
+            # Add basic user info
+            created_at = user.created_at
+            account_age = (datetime.datetime.now(UTC) - created_at).days
+            embed.add_field(name="Username", value=f"{user}", inline=True)
+            embed.add_field(name="Bot", value="Yes" if user.bot else "No", inline=True)
+            embed.add_field(name="Created", value=f"<t:{int(created_at.timestamp())}:R>\n({account_age} days ago)", inline=True)
+            
+            # Add server-specific info if member
+            if member:
+                joined_at = member.joined_at
+                join_age = (datetime.datetime.now(UTC) - joined_at).days if joined_at else 0
+                embed.add_field(name="Joined Server", value=f"<t:{int(joined_at.timestamp())}:R>\n({join_age} days ago)", inline=True)
+                embed.add_field(name="Top Role", value=member.top_role.mention, inline=True)
+                
+                # Add warning count if any
+                guild_id = str(interaction.guild.id)
+                user_id_str = str(user_id)
+                warning_count = 0
+                if guild_id in warnings_data and user_id_str in warnings_data[guild_id]:
+                    warning_count = len(warnings_data[guild_id][user_id_str])
+                embed.add_field(name="Warnings", value=str(warning_count), inline=True)
+            else:
+                embed.add_field(name="Server Status", value="Not in this server", inline=True)
+        else:
+            # No user found in cache, try to fetch
+            try:
+                user = await bot.fetch_user(user_id)
+                embed.description = f"User found: {user.mention} (not in cache)"
+                embed.set_thumbnail(url=user.display_avatar.url)
+                
+                # Add basic user info
+                created_at = user.created_at
+                account_age = (datetime.datetime.now(UTC) - created_at).days
+                embed.add_field(name="Username", value=f"{user}", inline=True)
+                embed.add_field(name="Bot", value="Yes" if user.bot else "No", inline=True)
+                embed.add_field(name="Created", value=f"<t:{int(created_at.timestamp())}:R>\n({account_age} days ago)", inline=True)
+                embed.add_field(name="Server Status", value="Not in this server", inline=True)
+            except discord.NotFound:
+                embed.description = "❌ No user found with this ID."
+                embed.color = discord.Color.red()
+            except Exception as e:
+                embed.description = f"Error fetching user: {str(e)}"
+                embed.color = discord.Color.red()
+        
+        await interaction.response.send_message(embed=embed)
+            
+    except Exception as e:
+        await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
+
 # Reaction roles commands
 @bot.tree.command(name="reactrole", description="Create a reaction role message")
 @app_commands.describe(
@@ -1505,7 +1810,7 @@ async def cmdadd(interaction: discord.Interaction, command: str, response: str, 
         cmd_data = {
             "response": response,
             "added_by": str(interaction.user.id),
-            "added_at": str(datetime.datetime.utcnow()),
+            "added_at": str(datetime.datetime.now(UTC)),
             "is_embed": is_embed
         }
         
@@ -1593,7 +1898,7 @@ async def remindme(interaction: discord.Interaction, message: str, hours: int = 
             return
             
         # Calculate reminder time
-        reminder_time = datetime.datetime.utcnow() + datetime.timedelta(hours=hours, minutes=minutes)
+        reminder_time = datetime.datetime.now(UTC) + datetime.timedelta(hours=hours, minutes=minutes)
         
         # Create task
         task = {
@@ -1643,7 +1948,7 @@ async def tempban(interaction: discord.Interaction, member: discord.Member, days
             return
             
         # Calculate unban time
-        unban_time = datetime.datetime.utcnow() + datetime.timedelta(days=days, hours=hours)
+        unban_time = datetime.datetime.now(UTC) + datetime.timedelta(days=days, hours=hours)
         
         # Ban the user
         full_reason = f"Temporary ban ({days}d {hours}h): {reason}"
@@ -2113,6 +2418,410 @@ async def ratelimit(interaction: discord.Interaction, messages: int, seconds: in
             action_text += " for 10 minutes"
             
         await interaction.response.send_message(f"Rate limit set: {messages} messages in {seconds} seconds will trigger: {action_text}", ephemeral=False)
+            
+    except Exception as e:
+        await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
+
+# Category lockdown
+@bot.tree.command(name="categorylock", description="Lock all channels in a category")
+@app_commands.describe(
+    category="The category to lock",
+    reason="Reason for the lockdown",
+    minutes="Minutes to lock the category (0 for indefinite)"
+)
+@app_commands.default_permissions(manage_channels=True)
+async def category_lock(interaction: discord.Interaction, category: discord.CategoryChannel, 
+                        reason: str = "No reason provided", minutes: int = 0):
+    try:
+        await interaction.response.defer()
+        
+        # Get default role
+        default_role = interaction.guild.default_role
+        
+        # Get all text channels in the category
+        text_channels = [c for c in category.channels if isinstance(c, discord.TextChannel)]
+        
+        if not text_channels:
+            await interaction.followup.send(f"No text channels found in category {category.name}.", ephemeral=True)
+            return
+            
+        # Create lockdown embed
+        lock_embed = discord.Embed(
+            title="🔒 Category Locked",
+            description=f"This category has been locked by {interaction.user.mention}.",
+            color=discord.Color.red()
+        )
+        lock_embed.add_field(name="Reason", value=reason, inline=False)
+        if minutes > 0:
+            lock_embed.add_field(name="Duration", value=f"{minutes} minutes", inline=False)
+            
+        # Lock all channels
+        locked_count = 0
+        for channel in text_channels:
+            try:
+                # Lock the channel
+                await channel.set_permissions(default_role, send_messages=False, reason=f"Category lockdown: {reason}")
+                locked_count += 1
+                
+                # Send notification
+                try:
+                    await channel.send(embed=lock_embed)
+                except:
+                    pass
+            except:
+                pass
+                
+        # Send confirmation
+        await interaction.followup.send(f"🔒 Locked {locked_count} channels in category {category.name}.", ephemeral=False)
+        
+        # Schedule unlock if duration is set
+        if minutes > 0:
+            await asyncio.sleep(minutes * 60)
+            
+            # Create unlock embed
+            unlock_embed = discord.Embed(
+                title="🔓 Category Unlocked",
+                description="This category has been automatically unlocked.",
+                color=discord.Color.green()
+            )
+            
+            # Unlock all channels
+            unlocked_count = 0
+            for channel in text_channels:
+                try:
+                    # Unlock the channel
+                    await channel.set_permissions(default_role, send_messages=None, reason="Category lockdown expired")
+                    unlocked_count += 1
+                    
+                    # Send notification
+                    try:
+                        await channel.send(embed=unlock_embed)
+                    except:
+                        pass
+                except:
+                    pass
+                    
+            # Log to mod-logs
+            try:
+                log_channel = discord.utils.get(interaction.guild.text_channels, name="mod-logs")
+                if log_channel:
+                    log_embed = discord.Embed(
+                        title="Category Auto-Unlocked",
+                        description=f"Category {category.name} was automatically unlocked after {minutes} minutes.",
+                        color=discord.Color.green(),
+                        timestamp=datetime.datetime.now(UTC)
+                    )
+                    await log_channel.send(embed=log_embed)
+            except:
+                pass
+                
+    except Exception as e:
+        await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
+
+@bot.tree.command(name="categoryunlock", description="Unlock all channels in a category")
+@app_commands.describe(
+    category="The category to unlock",
+    reason="Reason for unlocking"
+)
+@app_commands.default_permissions(manage_channels=True)
+async def category_unlock(interaction: discord.Interaction, category: discord.CategoryChannel, 
+                          reason: str = "No reason provided"):
+    try:
+        await interaction.response.defer()
+        
+        # Get default role
+        default_role = interaction.guild.default_role
+        
+        # Get all text channels in the category
+        text_channels = [c for c in category.channels if isinstance(c, discord.TextChannel)]
+        
+        if not text_channels:
+            await interaction.followup.send(f"No text channels found in category {category.name}.", ephemeral=True)
+            return
+            
+        # Create unlock embed
+        unlock_embed = discord.Embed(
+            title="🔓 Category Unlocked",
+            description=f"This category has been unlocked by {interaction.user.mention}.",
+            color=discord.Color.green()
+        )
+        unlock_embed.add_field(name="Reason", value=reason, inline=False)
+            
+        # Unlock all channels
+        unlocked_count = 0
+        for channel in text_channels:
+            try:
+                # Unlock the channel
+                await channel.set_permissions(default_role, send_messages=None, reason=f"Category unlock: {reason}")
+                unlocked_count += 1
+                
+                # Send notification
+                try:
+                    await channel.send(embed=unlock_embed)
+                except:
+                    pass
+            except:
+                pass
+                
+        # Send confirmation
+        await interaction.followup.send(f"🔓 Unlocked {unlocked_count} channels in category {category.name}.", ephemeral=False)
+                
+    except Exception as e:
+        await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
+
+# File to store mod notes
+NOTES_FILE = 'mod_notes.json'
+
+# Function to load notes
+def load_notes():
+    try:
+        if os.path.exists(NOTES_FILE):
+            with open(NOTES_FILE, 'r') as f:
+                return json.load(f)
+        return {}
+    except Exception as e:
+        print(f"Error loading notes: {e}")
+        return {}
+
+# Function to save notes
+def save_notes(data):
+    try:
+        with open(NOTES_FILE, 'w') as f:
+            json.dump(data, f, indent=4)
+    except Exception as e:
+        print(f"Error saving notes: {e}")
+
+# Initialize notes data
+notes_data = load_notes()
+
+# Note commands
+@bot.tree.command(name="note", description="Add a note about a user (only visible to mods)")
+@app_commands.describe(
+    user="The user to add a note about",
+    note="The note content"
+)
+@app_commands.default_permissions(moderate_members=True)
+async def add_note(interaction: discord.Interaction, user: discord.Member, note: str):
+    try:
+        # Initialize data structure if needed
+        guild_id = str(interaction.guild.id)
+        user_id = str(user.id)
+        
+        if guild_id not in notes_data:
+            notes_data[guild_id] = {}
+            
+        if user_id not in notes_data[guild_id]:
+            notes_data[guild_id][user_id] = []
+            
+        # Add the note
+        note_entry = {
+            "content": note,
+            "author_id": str(interaction.user.id),
+            "author_name": interaction.user.display_name,
+            "timestamp": str(datetime.datetime.now(UTC))
+        }
+        
+        notes_data[guild_id][user_id].append(note_entry)
+        save_notes(notes_data)
+        
+        # Get total notes count
+        note_count = len(notes_data[guild_id][user_id])
+        
+        await interaction.response.send_message(f"Added note about {user.mention}. They now have {note_count} notes.", ephemeral=True)
+            
+    except Exception as e:
+        await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
+
+@bot.tree.command(name="notes", description="View all notes about a user")
+@app_commands.describe(user="The user to view notes for")
+@app_commands.default_permissions(moderate_members=True)
+async def view_notes(interaction: discord.Interaction, user: discord.Member):
+    try:
+        # Get notes if any
+        guild_id = str(interaction.guild.id)
+        user_id = str(user.id)
+        
+        if guild_id not in notes_data or user_id not in notes_data[guild_id] or not notes_data[guild_id][user_id]:
+            await interaction.response.send_message(f"No notes found for {user.mention}.", ephemeral=True)
+            return
+            
+        # Create embed
+        embed = discord.Embed(
+            title=f"Mod Notes for {user.display_name}",
+            description=f"User ID: {user.id}",
+            color=discord.Color.blue()
+        )
+        embed.set_thumbnail(url=user.display_avatar.url)
+        
+        # Add notes to embed
+        notes = notes_data[guild_id][user_id]
+        for i, note in enumerate(notes, 1):
+            content = note.get("content", "No content")
+            author_name = note.get("author_name", "Unknown")
+            timestamp = note.get("timestamp", "Unknown time")
+            
+            embed.add_field(
+                name=f"Note #{i} by {author_name}",
+                value=f"{content}\n*Added: {timestamp}*",
+                inline=False
+            )
+            
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+            
+    except Exception as e:
+        await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
+
+@bot.tree.command(name="deletenote", description="Delete a note about a user")
+@app_commands.describe(
+    user="The user whose note to delete",
+    note_number="The note number to delete (use /notes to see numbers)"
+)
+@app_commands.default_permissions(administrator=True)
+async def delete_note(interaction: discord.Interaction, user: discord.Member, note_number: int):
+    try:
+        # Get notes if any
+        guild_id = str(interaction.guild.id)
+        user_id = str(user.id)
+        
+        if guild_id not in notes_data or user_id not in notes_data[guild_id] or not notes_data[guild_id][user_id]:
+            await interaction.response.send_message(f"No notes found for {user.mention}.", ephemeral=True)
+            return
+            
+        # Validate note number
+        notes = notes_data[guild_id][user_id]
+        if note_number < 1 or note_number > len(notes):
+            await interaction.response.send_message(f"Invalid note number. User has {len(notes)} notes.", ephemeral=True)
+            return
+            
+        # Remove the note
+        removed_note = notes.pop(note_number - 1)
+        save_notes(notes_data)
+        
+        await interaction.response.send_message(f"Deleted note #{note_number} about {user.mention}.", ephemeral=True)
+            
+    except Exception as e:
+        await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
+
+# Bulk moderation commands
+@bot.tree.command(name="bulkunban", description="Unban multiple users by ID")
+@app_commands.describe(
+    user_ids="User IDs separated by spaces",
+    reason="Reason for the unban"
+)
+@app_commands.default_permissions(administrator=True)
+async def bulk_unban(interaction: discord.Interaction, user_ids: str, reason: str = "Bulk unban"):
+    try:
+        await interaction.response.defer(ephemeral=True)
+        
+        # Parse user IDs
+        ids = [id.strip() for id in user_ids.split() if id.strip().isdigit()]
+        
+        if not ids:
+            await interaction.followup.send("No valid user IDs provided. Please provide space-separated user IDs.", ephemeral=True)
+            return
+        
+        # Track results
+        success = []
+        failed = []
+        
+        # Process each ID
+        for user_id in ids:
+            try:
+                # Try to convert to int
+                user_id = int(user_id)
+                
+                # Try to unban
+                try:
+                    await interaction.guild.unban(discord.Object(id=user_id), reason=f"Bulk unban: {reason}")
+                    success.append(str(user_id))
+                except discord.NotFound:
+                    failed.append(f"{user_id} (Not banned)")
+                except Exception as e:
+                    failed.append(f"{user_id} ({str(e)})")
+            except Exception as e:
+                failed.append(f"{user_id} ({str(e)})")
+        
+        # Send results
+        result = f"✅ Successfully unbanned {len(success)} users:\n"
+        if success:
+            result += ", ".join(success) + "\n\n"
+        
+        if failed:
+            result += f"❌ Failed to unban {len(failed)} users:\n"
+            result += ", ".join(failed)
+        
+        # Send log to mod-logs channel
+        log_channel = discord.utils.get(interaction.guild.text_channels, name="mod-logs")
+        if log_channel:
+            log_embed = discord.Embed(
+                title="Bulk Unban Executed",
+                description=f"{len(success)} users were unbanned by {interaction.user.mention}",
+                color=discord.Color.green()
+            )
+            log_embed.add_field(name="Reason", value=reason)
+            log_embed.add_field(name="Unbanned IDs", value=", ".join(success) if success else "None", inline=False)
+            await log_channel.send(embed=log_embed)
+        
+        await interaction.followup.send(result, ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
+
+# Server statistics command
+@bot.tree.command(name="serverinfo", description="Get detailed information about the server")
+async def server_info(interaction: discord.Interaction):
+    try:
+        guild = interaction.guild
+        
+        # Count members by status
+        total_members = len(guild.members)
+        humans = sum(1 for m in guild.members if not m.bot)
+        bots = sum(1 for m in guild.members if m.bot)
+        
+        # Count channel types
+        text_channels = len(guild.text_channels)
+        voice_channels = len(guild.voice_channels)
+        categories = len(guild.categories)
+        threads = sum(1 for c in guild.threads)
+        
+        # Count roles
+        role_count = len(guild.roles) - 1  # Subtract @everyone
+        
+        # Create embed
+        embed = discord.Embed(
+            title=f"{guild.name} Server Information",
+            description=guild.description or "No description set",
+            color=discord.Color.blue()
+        )
+        
+        # Set thumbnail to server icon
+        if guild.icon:
+            embed.set_thumbnail(url=guild.icon.url)
+            
+        # General info
+        embed.add_field(name="Owner", value=f"<@{guild.owner_id}>", inline=True)
+        embed.add_field(name="Server ID", value=guild.id, inline=True)
+        embed.add_field(name="Created", value=f"<t:{int(guild.created_at.timestamp())}:R>", inline=True)
+        
+        # Member counts
+        embed.add_field(name="Members", value=f"👥 Total: {total_members}\n👤 Humans: {humans}\n🤖 Bots: {bots}", inline=True)
+        
+        # Channel counts
+        embed.add_field(name="Channels", value=f"💬 Text: {text_channels}\n🎤 Voice: {voice_channels}\n📁 Categories: {categories}\n🧳 Threads: {threads}", inline=True)
+        
+        # Feature info
+        embed.add_field(name="Roles", value=f"🎖️ {role_count}", inline=True)
+        
+        # Server features
+        if guild.features:
+            features = "\n".join([f"• {feature.replace('_', ' ').title()}" for feature in guild.features])
+            embed.add_field(name="Server Features", value=features or "None", inline=False)
+            
+        # Boost status
+        boost_level = f"Level {guild.premium_tier}"
+        boost_count = guild.premium_subscription_count
+        embed.add_field(name="Boost Status", value=f"{boost_level} ({boost_count} boosts)", inline=False)
+        
+        await interaction.response.send_message(embed=embed)
             
     except Exception as e:
         await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
