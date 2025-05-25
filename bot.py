@@ -1161,17 +1161,21 @@ async def antiraid(interaction: discord.Interaction, status: int):
         await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
 
 # Mass moderation commands
-@bot.tree.command(name="purgewords", description="Delete all messages containing specific words in a channel")
+@bot.tree.command(name="purgewords", description="Delete ALL messages containing specific words in a channel")
 @app_commands.describe(
     channel="The channel to scan", 
     words="Words to search for (space separated)", 
     user="Optional: Only delete messages from this user",
-    limit="Optional: Maximum number of messages to scan (0 for all retrievable messages)",
-    silent="Optional: Whether to silently delete without showing a report"
+    batch_size="Optional: Number of messages to process in each batch (10-1000)",
+    silent="Optional: Whether to silently delete without showing a report",
+    exact_match="Optional: Whether words must match exactly or can be part of other words",
+    older_than="Optional: Only scan messages older than this many days",
+    newer_than="Optional: Only scan messages newer than this many days"
 )
 @app_commands.default_permissions(manage_messages=True)
 async def purgewords(interaction: discord.Interaction, channel: discord.TextChannel, words: str, 
-                     user: Optional[discord.Member] = None, limit: int = 1000, silent: bool = False):
+                     user: Optional[discord.Member] = None, batch_size: int = 100, silent: bool = False,
+                     exact_match: bool = False, older_than: int = 0, newer_than: int = 0):
     try:
         # Immediately defer the response as this could take time
         await interaction.response.defer(ephemeral=True)
@@ -1183,57 +1187,437 @@ async def purgewords(interaction: discord.Interaction, channel: discord.TextChan
             await interaction.followup.send("Please provide at least one word to search for.", ephemeral=True)
             return
             
-        # Validate limit
-        if limit <= 0:
-            limit = None  # Will retrieve all possible messages
-            
+        # Validate batch_size
+        batch_size = max(10, min(batch_size, 1000))  # Ensure batch size is between 10 and 1000
+        
         # Create progress message
-        progress = await interaction.followup.send(f"Scanning messages in {channel.mention} for: `{', '.join(search_words)}`...", ephemeral=True)
+        progress = await interaction.followup.send(
+            f"🔍 **SUPER SCAN MODE**: Scanning all messages in {channel.mention} for: `{', '.join(search_words)}`\n" +
+            f"Processing in batches of {batch_size} messages at a time...", 
+            ephemeral=True
+        )
         
-        # Keep track of deleted messages
-        deleted_count = 0
-        scanned_count = 0
-        matched_messages = []
-        last_report_time = datetime.datetime.now()
+        # Stats tracking
+        total_scanned = 0
+        total_matched = 0
+        total_deleted = 0
+        total_batches = 0
+        rate_limited_count = 0
+        batch_stats = []
         
-        # Create a log entry
-        log_entry = f"Deleted messages containing: {', '.join(search_words)}\n"
-        log_entry += f"Channel: {channel.name} ({channel.id})\n"
-        if user:
-            log_entry += f"User filter: {user.display_name} ({user.id})\n"
-        log_entry += "---\n"
+        # Calculate date filters if specified
+        now = datetime.datetime.now(UTC)
+        older_than_date = None if older_than <= 0 else now - datetime.timedelta(days=older_than)
+        newer_than_date = None if newer_than <= 0 else now - datetime.timedelta(days=newer_than)
         
-        # Iterate through messages in the channel
-        async for message in channel.history(limit=limit):
-            scanned_count += 1
+        # Flag to track if we've reached the end of messages
+        reached_end = False
+        last_message_id = None
+        
+        # Log to store deleted message samples
+        message_samples = []
+        
+        # Process messages in batches until we've covered the entire channel
+        while not reached_end:
+            # Create a batch
+            batch_number = total_batches + 1
+            await progress.edit(content=f"🔍 Scanning batch #{batch_number} in {channel.mention}...\n" +
+                                f"Total scanned so far: {total_scanned} messages")
             
-            # Check if message is from the specified user (if any)
-            if user and message.author != user:
-                continue
+            # Get messages for this batch
+            try:
+                if last_message_id:
+                    # Get messages before the last one we processed
+                    messages = []
+                    async for msg in channel.history(limit=batch_size, before=discord.Object(id=last_message_id)):
+                        messages.append(msg)
+                else:
+                    # First batch - get most recent messages
+                    messages = []
+                    async for msg in channel.history(limit=batch_size):
+                        messages.append(msg)
+            except Exception as e:
+                await progress.edit(content=f"Error retrieving messages: {str(e)}")
+                break
                 
-            # Check message content for the words
-            content = message.content.lower()
-            if any(word in content for word in search_words):
-                # Keep track of deleted message content for logs
-                msg_info = f"[{message.author.display_name}]: {message.content[:100]}"
-                if len(message.content) > 100:
-                    msg_info += "..."
-                matched_messages.append(msg_info)
-                log_entry += msg_info + "\n"
+            # Check if we've reached the end of the channel history
+            if not messages:
+                reached_end = True
+                break
                 
-                # Delete the message
-                await message.delete()
-                deleted_count += 1
+            # Save the ID of the last message in this batch
+            last_message_id = messages[-1].id
+            
+            # Track stats for this batch
+            batch_scanned = len(messages)
+            batch_matched = 0
+            batch_deleted = 0
+            batch_messages = []
+            
+            # Process each message in the batch
+            for message in messages:
+                # Skip if doesn't match our filters
+                if user and message.author.id != user.id:
+                    continue
+                    
+                # Skip if doesn't match date filters
+                if older_than_date and message.created_at > older_than_date:
+                    continue
+                if newer_than_date and message.created_at < newer_than_date:
+                    continue
+                    
+                # Check if message content matches the search words
+                content = message.content.lower()
+                match_found = False
                 
-                # Update progress every 5 messages or 3 seconds
-                now = datetime.datetime.now()
-                if deleted_count % 5 == 0 or (now - last_report_time).total_seconds() > 3:
-                    await progress.edit(content=f"Scanning... Found {deleted_count} messages containing target words (scanned {scanned_count} so far).")
-                    last_report_time = now
+                if exact_match:
+                    # Split content into words and check for exact matches
+                    message_words = re.findall(r'\b\w+\b', content)
+                    match_found = any(word in message_words for word in search_words)
+                else:
+                    # Check if any search word is contained within the content
+                    match_found = any(word in content for word in search_words)
+                    
+                if match_found:
+                    batch_matched += 1
+                    total_matched += 1
+                    
+                    # Keep track of matched message content for logs
+                    msg_info = f"[{message.author.display_name}]: {message.content[:100]}"
+                    if len(message.content) > 100:
+                        msg_info += "..."
+                    batch_messages.append(msg_info)
+                    
+                    # Only store first 50 samples to avoid memory issues
+                    if len(message_samples) < 50:
+                        message_samples.append(msg_info)
+                    
+                    # Try to delete the message
+                    try:
+                        retry_count = 0
+                        max_retries = 3
+                        deletion_success = False
+                        
+                        while not deletion_success and retry_count < max_retries:
+                            try:
+                                await message.delete()
+                                batch_deleted += 1
+                                total_deleted += 1
+                                deletion_success = True
+                                
+                                # Add delay between deletions to manage rate limits
+                                await asyncio.sleep(0.8)  # 800ms delay
+                            except discord.errors.HTTPException as e:
+                                if e.status == 429:  # Rate limited
+                                    rate_limited_count += 1
+                                    retry_count += 1
+                                    
+                                    # Extract retry_after from exception or use increasing backoff
+                                    retry_after = getattr(e, 'retry_after', 1.5 * retry_count)
+                                    
+                                    # Update progress with rate limit info
+                                    await progress.edit(content=f"⚠️ Rate limited! Waiting {retry_after:.1f}s before continuing...\n" +
+                                                        f"Batch #{batch_number}: {batch_deleted}/{batch_matched} deleted so far")
+                                    
+                                    # Wait before retrying
+                                    await asyncio.sleep(retry_after)
+                                else:
+                                    # Other HTTP error, skip this message
+                                    break
+                            except Exception:
+                                # Any other error, skip this message
+                                break
+                        
+                        # If we couldn't delete after max retries, log it
+                        if not deletion_success:
+                            print(f"Failed to delete message after {max_retries} attempts: {message.id}")
+                    except Exception as e:
+                        print(f"Error deleting message: {e}")
+            
+            # Update batch stats
+            total_scanned += batch_scanned
+            total_batches += 1
+            
+            # Store this batch's stats
+            batch_stats.append({
+                "batch": batch_number,
+                "scanned": batch_scanned,
+                "matched": batch_matched,
+                "deleted": batch_deleted,
+                "oldest_msg_id": last_message_id
+            })
+            
+            # Update progress with batch results
+            batch_info = f"✅ Batch #{batch_number} complete:\n"
+            batch_info += f"- Scanned: {batch_scanned} messages\n"
+            batch_info += f"- Matched: {batch_matched} messages\n"
+            batch_info += f"- Deleted: {batch_deleted} messages\n\n"
+            batch_info += f"📊 Running Total:\n"
+            batch_info += f"- Total Scanned: {total_scanned} messages\n"
+            batch_info += f"- Total Deleted: {total_deleted}/{total_matched} messages\n"
+            batch_info += f"- Rate Limits: {rate_limited_count} occurrences\n\n"
+            
+            if not reached_end:
+                batch_info += "⏳ Continuing to next batch..."
+            
+            await progress.edit(content=batch_info)
+            
+            # If this batch had no matches, do a shorter delay
+            if batch_matched == 0:
+                await asyncio.sleep(1)  # 1 second between batches with no matches
+            else:
+                # Allow a bit more time between batches with matches
+                await asyncio.sleep(2)  # 2 seconds between batches with matches
         
-        # Create final report
-        report = f"✅ Scan complete! Deleted {deleted_count} messages containing target words.\n"
-        report += f"Scanned a total of {scanned_count} messages in {channel.mention}.\n"
+        # Create final report embed and buttons
+        if total_batches == 0:
+            result_title = "❌ No messages found"
+            result_description = "No messages were found matching your criteria in this channel."
+            result_color = discord.Color.light_grey()
+        else:
+            result_title = f"🏁 SUPER SCAN COMPLETE!"
+            result_description = f"**Channel:** {channel.mention}\n**Words:** `{', '.join(search_words)}`"
+            result_color = discord.Color.green() if total_deleted > 0 else discord.Color.gold()
+        
+        # Create embed for results
+        result_embed = discord.Embed(
+            title=result_title,
+            description=result_description,
+            color=result_color,
+            timestamp=datetime.datetime.now(UTC)
+        )
+        
+        # Add main stats fields
+        result_embed.add_field(name="📊 Messages Scanned", value=str(total_scanned), inline=True)
+        result_embed.add_field(name="🔍 Matches Found", value=str(total_matched), inline=True)
+        result_embed.add_field(name="🗑️ Messages Deleted", value=str(total_deleted), inline=True)
+        
+        # Add filter information
+        filters_info = []
+        if user:
+            filters_info.append(f"👤 User: {user.mention}")
+        if exact_match:
+            filters_info.append("🔤 Exact word matches only")
+        if older_than > 0:
+            filters_info.append(f"📅 Older than {older_than} days")
+        if newer_than > 0:
+            filters_info.append(f"📅 Newer than {newer_than} days")
+            
+        if filters_info:
+            result_embed.add_field(
+                name="🔧 Filters Applied", 
+                value="\n".join(filters_info),
+                inline=False
+            )
+        
+        # Create a View for buttons
+        class PurgeActionView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=300)  # 5 minute timeout
+                self.batch_details_showing = False
+                self.samples_showing = False
+                
+            @discord.ui.button(label=f"Show Batch Details ({len([b for b in batch_stats if b['matched'] > 0])})", style=discord.ButtonStyle.primary, emoji="📋")
+            async def show_batch_details(self, button_interaction: discord.Interaction, button: discord.ui.Button):
+                # Toggle batch details display
+                if self.batch_details_showing:
+                    # Remove batch details field if it exists
+                    for i, field in enumerate(result_embed.fields):
+                        if field.name == "📋 Batch Details":
+                            result_embed.remove_field(i)
+                            break
+                    button.label = f"Show Batch Details ({len([b for b in batch_stats if b['matched'] > 0])})"  
+                    self.batch_details_showing = False
+                else:
+                    # Add batch details field
+                    matching_batches = [b for b in batch_stats if b["matched"] > 0]
+                    if matching_batches:
+                        batch_details = ""
+                        for batch in matching_batches[:15]:
+                            batch_details += f"**Batch #{batch['batch']}:** Found {batch['matched']}, Deleted {batch['deleted']}\n"
+                        
+                        if len(matching_batches) > 15:
+                            batch_details += f"...and {len(matching_batches) - 15} more batches\n"
+                            
+                        result_embed.add_field(
+                            name="📋 Batch Details",
+                            value=batch_details,
+                            inline=False
+                        )
+                        button.label = "Hide Batch Details"
+                        self.batch_details_showing = True
+                    else:
+                        batch_details = "No batches contained matches."
+                        result_embed.add_field(
+                            name="📋 Batch Details",
+                            value=batch_details,
+                            inline=False
+                        )
+                        button.label = "Hide Batch Details"
+                        self.batch_details_showing = True
+                
+                await button_interaction.response.edit_message(embed=result_embed, view=self)
+                
+            @discord.ui.button(label=f"Show Message Samples ({min(len(message_samples), 10)})", style=discord.ButtonStyle.primary, emoji="💬", disabled=len(message_samples)==0)
+            async def show_samples(self, button_interaction: discord.Interaction, button: discord.ui.Button):
+                # Toggle message samples display
+                if self.samples_showing:
+                    # Remove samples field if it exists
+                    for i, field in enumerate(result_embed.fields):
+                        if field.name == "💬 Message Samples":
+                            result_embed.remove_field(i)
+                            break
+                    button.label = f"Show Message Samples ({min(len(message_samples), 10)})"  
+                    self.samples_showing = False
+                else:
+                    # Add samples field
+                    if message_samples:
+                        samples = "\n".join(message_samples[:10])
+                        if len(samples) > 1024:
+                            samples = samples[:1020] + "..."
+                            
+                        result_embed.add_field(
+                            name="💬 Message Samples",
+                            value=samples,
+                            inline=False
+                        )
+                        button.label = "Hide Message Samples"
+                        self.samples_showing = True
+                
+                await button_interaction.response.edit_message(embed=result_embed, view=self)
+                
+            @discord.ui.button(label="Scan for Different Words", style=discord.ButtonStyle.success, emoji="🔄")
+            async def new_scan(self, button_interaction: discord.Interaction, button: discord.ui.Button):
+                # Create a modal for the new scan
+                class NewScanModal(discord.ui.Modal, title="New Word Filter Scan"):
+                    def __init__(self):
+                        super().__init__()
+                        self.words = discord.ui.TextInput(
+                            label="Words to Search For",
+                            placeholder="Enter space-separated words",
+                            required=True,
+                            style=discord.TextStyle.short
+                        )
+                        self.exact_match = discord.ui.TextInput(
+                            label="Exact Word Match? (yes/no)",
+                            placeholder="yes or no",
+                            required=False,
+                            default="no",
+                            style=discord.TextStyle.short
+                        )
+                        self.add_item(self.words)
+                        self.add_item(self.exact_match)
+                    
+                    async def on_submit(self, modal_interaction: discord.Interaction):
+                        # Get the values
+                        words_value = self.words.value
+                        exact_match_value = self.exact_match.value.lower() in ["yes", "y", "true"]
+                        
+                        # Acknowledge the modal submission
+                        await modal_interaction.response.send_message(
+                            f"Starting new scan in {channel.mention} for words: `{words_value}`\n" +
+                            f"Exact match: {'Yes' if exact_match_value else 'No'}",
+                            ephemeral=True
+                        )
+                        
+                        # Start a new purgewords command
+                        await purgewords(
+                            interaction=modal_interaction, 
+                            channel=channel, 
+                            words=words_value,
+                            user=user,  # Use the same user filter if any
+                            batch_size=batch_size,
+                            silent=silent,
+                            exact_match=exact_match_value,
+                            older_than=older_than,
+                            newer_than=newer_than
+                        )
+                
+                # Show the modal
+                await button_interaction.response.send_modal(NewScanModal())
+            
+            @discord.ui.button(label="Scan with Different Options", style=discord.ButtonStyle.secondary, emoji="⚙️")
+            async def advanced_options(self, button_interaction: discord.Interaction, button: discord.ui.Button):
+                # Create a modal for advanced options
+                class AdvancedOptionsModal(discord.ui.Modal, title="Advanced Scan Options"):
+                    def __init__(self):
+                        super().__init__()
+                        self.batch_size = discord.ui.TextInput(
+                            label="Batch Size (10-1000)",
+                            placeholder="Enter a number between 10 and 1000",
+                            required=False,
+                            default=str(batch_size),
+                            style=discord.TextStyle.short
+                        )
+                        self.older_than = discord.ui.TextInput(
+                            label="Only messages older than X days",
+                            placeholder="Enter a number (0 for no limit)",
+                            required=False,
+                            default=str(older_than),
+                            style=discord.TextStyle.short
+                        )
+                        self.newer_than = discord.ui.TextInput(
+                            label="Only messages newer than X days",
+                            placeholder="Enter a number (0 for no limit)",
+                            required=False,
+                            default=str(newer_than),
+                            style=discord.TextStyle.short
+                        )
+                        self.add_item(self.batch_size)
+                        self.add_item(self.older_than)
+                        self.add_item(self.newer_than)
+                    
+                    async def on_submit(self, modal_interaction: discord.Interaction):
+                        # Parse values with error handling
+                        try:
+                            batch_size_value = int(self.batch_size.value) if self.batch_size.value else batch_size
+                            batch_size_value = max(10, min(batch_size_value, 1000))
+                        except ValueError:
+                            batch_size_value = batch_size
+                            
+                        try:
+                            older_than_value = int(self.older_than.value) if self.older_than.value else older_than
+                            older_than_value = max(0, older_than_value)
+                        except ValueError:
+                            older_than_value = older_than
+                            
+                        try:
+                            newer_than_value = int(self.newer_than.value) if self.newer_than.value else newer_than
+                            newer_than_value = max(0, newer_than_value)
+                        except ValueError:
+                            newer_than_value = newer_than
+                        
+                        # Acknowledge the modal submission
+                        await modal_interaction.response.send_message(
+                            f"Starting new scan in {channel.mention} with updated options:\n" +
+                            f"- Batch Size: {batch_size_value}\n" +
+                            f"- Older Than: {older_than_value if older_than_value > 0 else 'No limit'} days\n" +
+                            f"- Newer Than: {newer_than_value if newer_than_value > 0 else 'No limit'} days",
+                            ephemeral=True
+                        )
+                        
+                        # Start a new purgewords command with updated options
+                        await purgewords(
+                            interaction=modal_interaction, 
+                            channel=channel, 
+                            words=words,  # Use the same words
+                            user=user,  # Use the same user filter if any
+                            batch_size=batch_size_value,
+                            silent=silent,
+                            exact_match=exact_match,
+                            older_than=older_than_value,
+                            newer_than=newer_than_value
+                        )
+                
+                # Show the modal
+                await button_interaction.response.send_modal(AdvancedOptionsModal())
+            
+            @discord.ui.button(label="Done", style=discord.ButtonStyle.danger, emoji="✖️")
+            async def close_menu(self, button_interaction: discord.Interaction, button: discord.ui.Button):
+                # Just acknowledge the interaction and disable all buttons
+                for child in self.children:
+                    child.disabled = True
+                await button_interaction.response.edit_message(view=self)
         
         # Send to mod-logs if available
         try:
@@ -1241,20 +1625,33 @@ async def purgewords(interaction: discord.Interaction, channel: discord.TextChan
             if log_channel:
                 # Create log embed
                 log_embed = discord.Embed(
-                    title=f"Channel Purge: Word Filter",
-                    description=f"{interaction.user.mention} purged {deleted_count} messages containing target words.",
+                    title=f"🧹 Super Channel Purge: Word Filter",
+                    description=f"{interaction.user.mention} purged {total_deleted} messages containing target words.",
                     color=discord.Color.red(),
-                    timestamp=discord.utils.utcnow()
+                    timestamp=datetime.datetime.now(UTC)
                 )
                 log_embed.add_field(name="Channel", value=channel.mention, inline=True)
                 log_embed.add_field(name="Target Words", value=f"`{', '.join(search_words)}`", inline=True)
                 log_embed.add_field(name="User Filter", value=user.mention if user else "None", inline=True)
-                log_embed.add_field(name="Messages Scanned", value=str(scanned_count), inline=True)
-                log_embed.add_field(name="Messages Deleted", value=str(deleted_count), inline=True)
+                log_embed.add_field(name="Total Scanned", value=str(total_scanned), inline=True)
+                log_embed.add_field(name="Total Deleted", value=str(total_deleted), inline=True)
+                log_embed.add_field(name="Match Type", value="Exact word matches" if exact_match else "Contains word", inline=True)
+                
+                # Include date filter info if used
+                if older_than > 0 or newer_than > 0:
+                    date_filter = ""
+                    if older_than > 0:
+                        date_filter += f"> {older_than} days old "
+                    if newer_than > 0:
+                        date_filter += f"< {newer_than} days old"
+                    log_embed.add_field(name="Date Filter", value=date_filter.strip(), inline=True)
+                
+                # Add batch info
+                log_embed.add_field(name="Batches", value=f"{total_batches} batches of {batch_size} messages", inline=True)
                 
                 # Add sample of deleted messages if not too many
-                if deleted_count > 0 and deleted_count <= 15 and not silent:
-                    samples = "\n".join(matched_messages[:15])
+                if message_samples and not silent:
+                    samples = "\n".join(message_samples[:15])
                     if len(samples) > 1024:
                         samples = samples[:1020] + "..."
                     log_embed.add_field(name="Sample Deleted Messages", value=samples, inline=False)
@@ -1263,8 +1660,8 @@ async def purgewords(interaction: discord.Interaction, channel: discord.TextChan
         except Exception as e:
             print(f"Error sending purge log: {e}")
         
-        # Send final report to user
-        await progress.edit(content=report)
+        # Send final report to user with buttons
+        await progress.edit(content=None, embed=result_embed, view=PurgeActionView())
         
     except discord.Forbidden:
         await interaction.followup.send("I don't have permission to delete messages in that channel.", ephemeral=True)
