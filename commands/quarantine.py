@@ -1242,79 +1242,172 @@ async def start_stage_challenge(guild, game_id, stage):
     
     save_prison_break_data(prison_break_data)
     
-    # Send challenge to jail-cam
+    # Create the challenge embed
+    embed = discord.Embed(
+        title=f"🎯 {stage_info['name']} - Challenge {stage}",
+        description=stage_info['description'],
+        color=0xffaa00
+    )
+    
+    if stage == 1:
+        embed.add_field(
+            name="🔢 Lock Combination Challenge",
+            value=(
+                "**PRISONERS:** Type the correct 4-digit combination to unlock your cell!\n\n"
+                "📝 **Format:** `1-2-3-4` (numbers separated by dashes)\n"
+                "🎯 **Example:** `3-7-1-9` or `5-2-8-4`\n"
+                "⚠️ **Warning:** 3 wrong attempts = lock jams and sentence extends!\n"
+                "💡 **Tip:** Try common patterns or listen for spectator hints!"
+            ),
+            inline=False
+        )
+    elif stage == 2:
+        embed.add_field(
+            name="🗺️ Tunnel Navigation Challenge",
+            value=(
+                "**PRISONERS:** Dig a tunnel by following the correct path!\n\n"
+                "📝 **Commands:** Type one direction at a time\n"
+                "🧭 **Directions:** `north`, `south`, `east`, `west`\n"
+                "🎯 **Goal:** Follow the secret path to reach the other side\n"
+                "⚠️ **Warning:** 4 wrong directions = tunnel collapses!\n"
+                "💡 **Tip:** Each correct direction shows your progress!"
+            ),
+            inline=False
+        )
+    elif stage == 3:
+        embed.add_field(
+            name="👮 Stealth Challenge", 
+            value=(
+                f"**PRISONERS:** Hide from {game_data['current_challenge']['guards']} guards patrolling the yard!\n\n"
+                "📝 **Commands:** Type where you want to hide\n"
+                "🏠 **Options:** `behind tree`, `under truck`, `in shadows`, `behind dumpster`, `in alcove`\n"
+                "🎯 **Goal:** Find the one safe hiding spot the guards can't see\n"
+                "⚠️ **Warning:** 4 spotted attempts = full alert and sentence extends!\n"
+                "💡 **Tip:** Think like a guard - where would YOU look first?"
+            ),
+            inline=False
+        )
+    elif stage == 4:
+        embed.add_field(
+            name="🤝 Teamwork Challenge",
+            value=(
+                "**PRISONERS:** All prisoners must coordinate for the final escape!\n\n"
+                "📝 **Command:** ALL players type the same secret code word\n"
+                "🎯 **Goal:** Everyone must say the code word at the same time\n"
+                "💭 **Hint:** Think about what you're trying to achieve...\n"
+                "⚠️ **Warning:** 5 wrong codes = authorities get suspicious!\n"
+                "💡 **Tip:** Communicate! The code is related to your goal!"
+            ),
+            inline=False
+        )
+        
+    embed.add_field(
+        name="⏰ Time Limit",
+        value=f"{stage_info['time_limit']} seconds",
+        inline=True
+    )
+    embed.add_field(
+        name="🎭 Spectator Actions",
+        value="React with help/sabotage emojis on messages to influence the outcome!",
+        inline=True
+    )
+    
+    # Send challenge to jail-cam channel (for spectators)
     jail_cam_channel = get_jail_cam_channel(guild)
     if jail_cam_channel:
-        embed = discord.Embed(
-            title=f"🎯 {stage_info['name']} - Challenge {stage}",
-            description=stage_info['description'],
-            color=0xffaa00
-        )
-        
-        if stage == 1:
-            embed.add_field(
-                name="🔢 Lock Combination Challenge",
-                value=(
-                    "**PRISONERS:** Type the correct 4-digit combination to unlock your cell!\n\n"
-                    "📝 **Format:** `1-2-3-4` (numbers separated by dashes)\n"
-                    "🎯 **Example:** `3-7-1-9` or `5-2-8-4`\n"
-                    "⚠️ **Warning:** 3 wrong attempts = lock jams and sentence extends!\n"
-                    "💡 **Tip:** Try common patterns or listen for spectator hints!"
-                ),
-                inline=False
-            )
-        elif stage == 2:
-            embed.add_field(
-                name="🗺️ Tunnel Navigation Challenge",
-                value=(
-                    "**PRISONERS:** Dig a tunnel by following the correct path!\n\n"
-                    "📝 **Commands:** Type one direction at a time\n"
-                    "🧭 **Directions:** `north`, `south`, `east`, `west`\n"
-                    "🎯 **Goal:** Follow the secret path to reach the other side\n"
-                    "⚠️ **Warning:** 4 wrong directions = tunnel collapses!\n"
-                    "💡 **Tip:** Each correct direction shows your progress!"
-                ),
-                inline=False
-            )
-        elif stage == 3:
-            embed.add_field(
-                name="👮 Stealth Challenge", 
-                value=(
-                    f"**PRISONERS:** Hide from {game_data['current_challenge']['guards']} guards patrolling the yard!\n\n"
-                    "📝 **Commands:** Type where you want to hide\n"
-                    "🏠 **Options:** `behind tree`, `under truck`, `in shadows`, `behind dumpster`, `in alcove`\n"
-                    "🎯 **Goal:** Find the one safe hiding spot the guards can't see\n"
-                    "⚠️ **Warning:** 4 spotted attempts = full alert and sentence extends!\n"
-                    "💡 **Tip:** Think like a guard - where would YOU look first?"
-                ),
-                inline=False
-            )
-        elif stage == 4:
-            embed.add_field(
-                name="🤝 Teamwork Challenge",
-                value=(
-                    "**PRISONERS:** All prisoners must coordinate for the final escape!\n\n"
-                    "📝 **Command:** ALL players type the same secret code word\n"
-                    "🎯 **Goal:** Everyone must say the code word at the same time\n"
-                    "💭 **Hint:** Think about what you're trying to achieve...\n"
-                    "⚠️ **Warning:** 5 wrong codes = authorities get suspicious!\n"
-                    "💡 **Tip:** Communicate! The code is related to your goal!"
-                ),
-                inline=False
-            )
-            
-        embed.add_field(
-            name="⏰ Time Limit",
-            value=f"{stage_info['time_limit']} seconds",
-            inline=True
-        )
-        embed.add_field(
-            name="🎭 Spectator Actions",
-            value="React with help/sabotage emojis on messages to influence the outcome!",
-            inline=True
-        )
-        
         await jail_cam_channel.send(embed=embed)
+    
+    # ===== CRUCIAL FIX: Send challenge to each prisoner's quarantine channel =====
+    # Get quarantined users (excluding server_settings)
+    quarantined_users = {}
+    if guild_id in quarantine_data:
+        quarantined_users = {k: v for k, v in quarantine_data[guild_id].items() if k != "server_settings"}
+    
+    # Send challenge to each prisoner's quarantine channel
+    for player_id in game_data["players"]:
+        player_user_id = str(player_id)
+        if player_user_id in quarantined_users:
+            prisoner_data = quarantined_users[player_user_id]
+            quarantine_channel_id = prisoner_data.get("channel_id")
+            
+            if quarantine_channel_id:
+                quarantine_channel = guild.get_channel(int(quarantine_channel_id))
+                if quarantine_channel:
+                    # Create a prisoner-specific embed
+                    prisoner_embed = discord.Embed(
+                        title=f"🎮 PRISON BREAK - {stage_info['name']}",
+                        description=f"**Stage {stage}** has begun! Time to escape!",
+                        color=0xff6600
+                    )
+                    
+                    # Add the challenge instructions
+                    if stage == 1:
+                        prisoner_embed.add_field(
+                            name="🔓 Your Mission: Pick the Lock",
+                            value=(
+                                "**Type a 4-digit combination to unlock your cell door!**\n\n"
+                                "📝 **Format:** `1-2-3-4` (numbers with dashes)\n"
+                                "🎯 **Examples:** `3-7-1-9`, `5-2-8-4`, `1-0-0-1`\n"
+                                "⚠️ **Warning:** 3 wrong tries = lock breaks!\n"
+                                "💡 **Hint:** Spectators might help you in the jail-cam!"
+                            ),
+                            inline=False
+                        )
+                    elif stage == 2:
+                        prisoner_embed.add_field(
+                            name="🕳️ Your Mission: Dig a Tunnel",
+                            value=(
+                                "**Navigate the underground maze to freedom!**\n\n"
+                                "📝 **Commands:** Type one direction at a time\n"
+                                "🧭 **Options:** `north`, `south`, `east`, `west`\n"
+                                "🎯 **Goal:** Find the correct path sequence\n"
+                                "⚠️ **Warning:** 4 wrong turns = tunnel collapse!"
+                            ),
+                            inline=False
+                        )
+                    elif stage == 3:
+                        prisoner_embed.add_field(
+                            name="👮 Your Mission: Evade the Guards",
+                            value=(
+                                f"**{game_data['current_challenge']['guards']} guards are patrolling! Find a safe hiding spot!**\n\n"
+                                "📝 **Command:** Type where to hide\n"
+                                "🏠 **Options:** `behind tree`, `under truck`, `in shadows`, `behind dumpster`, `in alcove`\n"
+                                "🎯 **Goal:** Pick the ONE safe spot\n"
+                                "⚠️ **Warning:** 4 failed hides = busted!"
+                            ),
+                            inline=False
+                        )
+                    elif stage == 4:
+                        prisoner_embed.add_field(
+                            name="🚗 Your Mission: The Great Escape",
+                            value=(
+                                "**ALL prisoners must work together for the final escape!**\n\n"
+                                "📝 **Command:** Type the secret escape code word\n"
+                                "🤝 **Teamwork:** Everyone must say the same word\n"
+                                "💭 **Hint:** What's your ultimate goal here?\n"
+                                "⚠️ **Warning:** 5 wrong codes = authorities alerted!"
+                            ),
+                            inline=False
+                        )
+                    
+                    prisoner_embed.add_field(
+                        name="⏰ Time Remaining",
+                        value=f"{stage_info['time_limit']} seconds",
+                        inline=True
+                    )
+                    prisoner_embed.add_field(
+                        name="📺 Public View",
+                        value="Spectators are watching in jail-cam!",
+                        inline=True
+                    )
+                    
+                    prisoner_embed.set_footer(text="Type your answer in this channel! Good luck!")
+                    
+                    try:
+                        await quarantine_channel.send(embed=prisoner_embed)
+                        print(f"Sent challenge to quarantine channel for player {player_id}")
+                    except Exception as e:
+                        print(f"Error sending challenge to quarantine channel for player {player_id}: {e}")
 
 async def reduce_quarantine_sentence(guild, user, percentage):
     """Reduce a quarantined user's sentence by a percentage of their original sentence"""
@@ -1407,7 +1500,22 @@ async def handle_prison_break_attempt(message, guild_id, game_id, game_data, cur
         # Get jail-cam channel for announcements
         jail_cam_channel = get_jail_cam_channel(message.guild)
         
+        # Get the prisoner's quarantine channel
+        prisoner_quarantine_channel = None
+        user_id = str(message.author.id)
+        if guild_id in quarantine_data and user_id in quarantine_data[guild_id]:
+            quarantine_channel_id = quarantine_data[guild_id][user_id].get("channel_id")
+            if quarantine_channel_id:
+                prisoner_quarantine_channel = message.guild.get_channel(int(quarantine_channel_id))
+        
         success = False
+        
+        # Helper function to send messages to both channels
+        async def send_feedback(jail_cam_msg, prisoner_msg=None):
+            if jail_cam_channel:
+                await jail_cam_channel.send(jail_cam_msg)
+            if prisoner_quarantine_channel:
+                await prisoner_quarantine_channel.send(prisoner_msg or jail_cam_msg)
         
         if challenge_type == "combination":  # Stage 1: Lock Picking
             try:
@@ -1421,28 +1529,39 @@ async def handle_prison_break_attempt(message, guild_id, game_id, game_data, cur
                         reward_msg = PRISON_BREAK_REWARDS[f"stage_{stage}"]["message"]
                         await reduce_quarantine_sentence(message.guild, message.author, PRISON_BREAK_REWARDS[f"stage_{stage}"]["sentence_reduction"])
                         
-                        if jail_cam_channel:
-                            await jail_cam_channel.send(f"🔓 **LOCK PICKED!** {message.author.display_name} cracked the combination! {reward_msg}")
+                        await send_feedback(
+                            f"🔓 **LOCK PICKED!** {message.author.display_name} cracked the combination! {reward_msg}",
+                            f"🔓 **SUCCESS!** You cracked the lock with combination {content}! {reward_msg}"
+                        )
                         
                         # Advance to next stage
                         await advance_prison_break_stage(message.guild, guild_id, game_id, game_data)
                     else:
                         # Track failed attempts
                         current_challenge["attempts"] = current_challenge.get("attempts", 0) + 1
-                        if jail_cam_channel:
-                            await jail_cam_channel.send(f"🔒 {message.author.display_name} tried combination {content} but the lock jammed! Attempt {current_challenge['attempts']}")
+                        attempts_left = 3 - current_challenge["attempts"]
+                        
+                        await send_feedback(
+                            f"🔒 {message.author.display_name} tried combination {content} but the lock jammed! Attempt {current_challenge['attempts']}/3",
+                            f"❌ **WRONG!** Combination {content} failed. You have {attempts_left} attempts left before the lock breaks!"
+                        )
                         
                         # After 3 failed attempts, apply penalty
                         if current_challenge["attempts"] >= 3:
                             failure_msg = PRISON_BREAK_FAILURES[f"stage_{stage}"]["message"]
                             await extend_quarantine_sentence(message.guild, message.author, PRISON_BREAK_FAILURES[f"stage_{stage}"]["sentence_addition"])
-                            if jail_cam_channel:
-                                await jail_cam_channel.send(f"💥 **LOCK BROKEN!** {message.author.display_name} jammed the lock after too many attempts! {failure_msg}")
+                            
+                            await send_feedback(
+                                f"💥 **LOCK BROKEN!** {message.author.display_name} jammed the lock after too many attempts! {failure_msg}",
+                                f"💥 **LOCK BROKEN!** You used all your attempts! {failure_msg} New lock installed - try again!"
+                            )
                             # Reset attempts for retry
                             current_challenge["attempts"] = 0
             except ValueError:
-                if jail_cam_channel:
-                    await jail_cam_channel.send(f"🤔 {message.author.display_name} mumbled something incomprehensible while picking the lock...")
+                await send_feedback(
+                    f"🤔 {message.author.display_name} mumbled something incomprehensible while picking the lock...",
+                    f"❓ **Invalid format!** Use format like `1-2-3-4` (numbers with dashes)"
+                )
                     
         elif challenge_type == "path":  # Stage 2: Tunnel Digging
             directions = ["north", "south", "east", "west"]
@@ -1459,16 +1578,23 @@ async def handle_prison_break_attempt(message, guild_id, game_id, game_data, cur
                         reward_msg = PRISON_BREAK_REWARDS[f"stage_{stage}"]["message"]
                         await reduce_quarantine_sentence(message.guild, message.author, PRISON_BREAK_REWARDS[f"stage_{stage}"]["sentence_reduction"])
                         
-                        if jail_cam_channel:
-                            await jail_cam_channel.send(f"🕳️ **TUNNEL COMPLETE!** {message.author.display_name} dug through! Path: {' → '.join(correct_path)} {reward_msg}")
+                        await send_feedback(
+                            f"🕳️ **TUNNEL COMPLETE!** {message.author.display_name} dug through! Path: {' → '.join(correct_path)} {reward_msg}",
+                            f"🕳️ **FREEDOM!** You completed the tunnel! Path was: {' → '.join(correct_path)} {reward_msg}"
+                        )
                         
                         await advance_prison_break_stage(message.guild, guild_id, game_id, game_data)
                     else:
-                        if jail_cam_channel:
-                            await jail_cam_channel.send(f"⛏️ {message.author.display_name} dug {content}! Progress: {len(progress)}/{len(correct_path)}")
+                        remaining = len(correct_path) - len(progress)
+                        await send_feedback(
+                            f"⛏️ {message.author.display_name} dug {content}! Progress: {len(progress)}/{len(correct_path)}",
+                            f"✅ **Good!** You dug {content}. Progress: {len(progress)}/{len(correct_path)} - {remaining} more directions needed!"
+                        )
                 else:
-                    if jail_cam_channel:
-                        await jail_cam_channel.send(f"💥 {message.author.display_name} hit a rock going {content}! The tunnel collapsed a bit...")
+                    await send_feedback(
+                        f"💥 {message.author.display_name} hit a rock going {content}! The tunnel collapsed a bit...",
+                        f"💥 **WRONG DIRECTION!** You hit a rock going {content}! The tunnel is getting unstable..."
+                    )
                         
                     # Track wrong direction attempts
                     current_challenge["wrong_attempts"] = current_challenge.get("wrong_attempts", 0) + 1
@@ -1477,11 +1603,19 @@ async def handle_prison_break_attempt(message, guild_id, game_id, game_data, cur
                     if current_challenge["wrong_attempts"] >= 4:
                         failure_msg = PRISON_BREAK_FAILURES[f"stage_{stage}"]["message"]
                         await extend_quarantine_sentence(message.guild, message.author, PRISON_BREAK_FAILURES[f"stage_{stage}"]["sentence_addition"])
-                        if jail_cam_channel:
-                            await jail_cam_channel.send(f"🕳️💥 **TUNNEL COLLAPSE!** {message.author.display_name} caused a major cave-in! {failure_msg}")
+                        
+                        await send_feedback(
+                            f"🕳️💥 **TUNNEL COLLAPSE!** {message.author.display_name} caused a major cave-in! {failure_msg}",
+                            f"🕳️💥 **TUNNEL COLLAPSED!** Too many wrong turns! {failure_msg} Starting over with a new tunnel..."
+                        )
                         # Reset progress and attempts for retry
                         current_challenge["progress"] = []
                         current_challenge["wrong_attempts"] = 0
+            else:
+                await send_feedback(
+                    f"🤔 {message.author.display_name} said '{content}' but that's not a direction...",
+                    f"❓ **Invalid direction!** Use: `north`, `south`, `east`, or `west`"
+                )
         
         elif challenge_type == "stealth":  # Stage 3: Guard Evasion
             safe_spots = ["behind tree", "under truck", "in shadows", "behind dumpster", "in alcove"]
@@ -1493,23 +1627,37 @@ async def handle_prison_break_attempt(message, guild_id, game_id, game_data, cur
                     reward_msg = PRISON_BREAK_REWARDS[f"stage_{stage}"]["message"]
                     await reduce_quarantine_sentence(message.guild, message.author, PRISON_BREAK_REWARDS[f"stage_{stage}"]["sentence_reduction"])
                     
-                    if jail_cam_channel:
-                        await jail_cam_channel.send(f"👮 **GUARDS EVADED!** {message.author.display_name} hid {content} and slipped past! {reward_msg}")
+                    await send_feedback(
+                        f"👮 **GUARDS EVADED!** {message.author.display_name} hid {content} and slipped past! {reward_msg}",
+                        f"👮 **PERFECT HIDING!** You hid {content} and the guards passed by! {reward_msg}"
+                    )
                     
                     await advance_prison_break_stage(message.guild, guild_id, game_id, game_data)
                 else:
                     current_challenge["attempts"] += 1
-                    if jail_cam_channel:
-                        await jail_cam_channel.send(f"🚨 {message.author.display_name} tried to hide {content} but a guard spotted them! Attempt {current_challenge['attempts']}")
+                    attempts_left = 4 - current_challenge["attempts"]
+                    
+                    await send_feedback(
+                        f"🚨 {message.author.display_name} tried to hide {content} but a guard spotted them! Attempt {current_challenge['attempts']}/4",
+                        f"🚨 **SPOTTED!** A guard saw you {content}! {attempts_left} attempts left before full alert!"
+                    )
                         
                     # After 4 failed hiding attempts, guards become fully alert
                     if current_challenge["attempts"] >= 4:
                         failure_msg = PRISON_BREAK_FAILURES[f"stage_{stage}"]["message"]
                         await extend_quarantine_sentence(message.guild, message.author, PRISON_BREAK_FAILURES[f"stage_{stage}"]["sentence_addition"])
-                        if jail_cam_channel:
-                            await jail_cam_channel.send(f"👮🚨 **GUARDS ALERTED!** {message.author.display_name} was spotted too many times! {failure_msg}")
+                        
+                        await send_feedback(
+                            f"👮🚨 **GUARDS ALERTED!** {message.author.display_name} was spotted too many times! {failure_msg}",
+                            f"👮🚨 **FULL ALERT!** Guards are everywhere now! {failure_msg} Wait for them to calm down..."
+                        )
                         # Reset attempts for retry
                         current_challenge["attempts"] = 0
+            else:
+                await send_feedback(
+                    f"🤔 {message.author.display_name} said '{content}' but that's not a hiding spot...",
+                    f"❓ **Invalid hiding spot!** Use: `behind tree`, `under truck`, `in shadows`, `behind dumpster`, or `in alcove`"
+                )
         
         elif challenge_type == "teamwork":  # Stage 4: Great Escape
             code_word = current_challenge["code_word"]
@@ -1530,27 +1678,35 @@ async def handle_prison_break_attempt(message, guild_id, game_id, game_data, cur
                         if member:
                             await reduce_quarantine_sentence(message.guild, member, PRISON_BREAK_REWARDS[f"stage_{stage}"]["sentence_reduction"])
                         
-                        if jail_cam_channel:
-                            player_names = []
-                            for player_id in game_data["players"]:
-                                member = message.guild.get_member(player_id)
-                                if member:
-                                    player_names.append(member.display_name)
-                            
-                            await jail_cam_channel.send(f"🚗 **FREEDOM ACHIEVED!** All prisoners ({', '.join(player_names)}) escaped together! {reward_msg}")
+                    player_names = []
+                    for player_id in game_data["players"]:
+                        member = message.guild.get_member(player_id)
+                        if member:
+                            player_names.append(member.display_name)
+                    
+                    await send_feedback(
+                        f"🚗 **FREEDOM ACHIEVED!** All prisoners ({', '.join(player_names)}) escaped together! {reward_msg}",
+                        f"🚗 **ESCAPE SUCCESSFUL!** You all said '{code_word}' together and escaped! {reward_msg}"
+                    )
                         
-                        # End the game
-                        game_data["active"] = False
-                        game_data["completed"] = True
-                    else:
-                        if jail_cam_channel:
-                            remaining = len(game_data["players"]) - len(players_ready)
-                            await jail_cam_channel.send(f"🤝 {message.author.display_name} is ready to escape! Waiting for {remaining} more prisoner(s)...")
+                    # End the game
+                    game_data["active"] = False
+                    game_data["completed"] = True
+                else:
+                    remaining = len(game_data["players"]) - len(players_ready)
+                    await send_feedback(
+                        f"🤝 {message.author.display_name} is ready to escape! Waiting for {remaining} more prisoner(s)...",
+                        f"🤝 **CORRECT CODE!** You said '{code_word}'! Waiting for {remaining} more prisoner(s) to say the same thing..."
+                    )
             else:
                 # Wrong code word attempt
                 current_challenge["wrong_codes"] = current_challenge.get("wrong_codes", 0) + 1
-                if jail_cam_channel:
-                    await jail_cam_channel.send(f"❌ {message.author.display_name} said '{content}' but that's not the escape code!")
+                codes_left = 5 - current_challenge["wrong_codes"]
+                
+                await send_feedback(
+                    f"❌ {message.author.display_name} said '{content}' but that's not the escape code!",
+                    f"❌ **WRONG CODE!** '{content}' is not the escape word. {codes_left} attempts left before authorities get suspicious!"
+                )
                 
                 # After 5 wrong code attempts across all players, authorities get suspicious
                 if current_challenge["wrong_codes"] >= 5:
@@ -1561,8 +1717,10 @@ async def handle_prison_break_attempt(message, guild_id, game_id, game_data, cur
                         if member:
                             await extend_quarantine_sentence(message.guild, member, PRISON_BREAK_FAILURES[f"stage_{stage}"]["sentence_addition"])
                     
-                    if jail_cam_channel:
-                        await jail_cam_channel.send(f"🚨💥 **ESCAPE FOILED!** Too many wrong codes alerted the authorities! {failure_msg}")
+                    await send_feedback(
+                        f"🚨💥 **ESCAPE FOILED!** Too many wrong codes alerted the authorities! {failure_msg}",
+                        f"🚨💥 **AUTHORITIES ALERTED!** Too many wrong codes! {failure_msg} They're onto you - be more careful!"
+                    )
                     # Reset for retry
                     current_challenge["wrong_codes"] = 0
                     current_challenge["players_ready"] = []
@@ -1577,8 +1735,10 @@ async def handle_prison_break_attempt(message, guild_id, game_id, game_data, cur
         if help_votes > sabotage_votes and help_votes > 2:
             # Spectators are helping - increase success chance
             if not success and random.random() < 0.3:  # 30% chance for spectator help to save the day
-                if jail_cam_channel:
-                    await jail_cam_channel.send("✨ **SPECTATOR ASSISTANCE WORKED!** The crowd's help made all the difference!")
+                await send_feedback(
+                    "✨ **SPECTATOR ASSISTANCE WORKED!** The crowd's help made all the difference!",
+                    "✨ **SPECTATOR HELP!** The crowd's assistance saved you from failure!"
+                )
                 # Don't override success but give a small sentence reduction
                 await reduce_quarantine_sentence(message.guild, message.author, 2)
                 
@@ -1586,8 +1746,10 @@ async def handle_prison_break_attempt(message, guild_id, game_id, game_data, cur
             # Spectators are sabotaging - decrease success chance
             if success and random.random() < 0.2:  # 20% chance for sabotage to ruin success
                 success = False
-                if jail_cam_channel:
-                    await jail_cam_channel.send("💥 **SABOTAGE SUCCESSFUL!** The crowd's interference ruined the escape!")
+                await send_feedback(
+                    "💥 **SABOTAGE SUCCESSFUL!** The crowd's interference ruined the escape!",
+                    "💥 **SABOTAGED!** Spectators interfered and ruined your attempt!"
+                )
                 await extend_quarantine_sentence(message.guild, message.author, 3)
         
     except Exception as e:
