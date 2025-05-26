@@ -39,41 +39,14 @@ class CollectionView(discord.ui.View):
             index = 0
         
         card = self.cards[index]
-        card_id, name, description, rarity, image_url, created_at, count = card
         
-        # Create gorgeous collection card embed
-        embed = discord.Embed(
-            title=f"🃏 {self.user.display_name}'s Collection",
-            color=self.trading_cards.get_rarity_color(rarity)
-        )
+        # Use the main card embed creation for consistency
+        embed, discord_file = self.trading_cards.create_card_embed(card, "collection")
         
-        # Beautiful card display
-        rarity_stars = {
-            'Common': "⭐",
-            'Uncommon': "⭐⭐", 
-            'Rare': "⭐⭐⭐",
-            'Legendary': "⭐⭐⭐⭐"
-        }
+        # Update the title for collection context
+        embed.title = f"🃏 {self.user.display_name}'s Collection - {card[1]}"
         
-        card_display = f"**{name}**\n{rarity_stars.get(rarity, '⭐')} {self.trading_cards.get_rarity_emoji(rarity)} {rarity}"
-        if description:
-            card_display += f"\n\n*{description}*"
-        
-        embed.description = card_display
-        
-        # Add essential info
-        embed.add_field(name="🔢 Owned", value=f"x{count}", inline=True)
-        embed.add_field(name="🆔 ID", value=f"#{card_id}", inline=True)
-        embed.add_field(name="📊 Rarity", value=f"{rarity} ({self.get_rarity_rate(rarity)})", inline=True)
-        
-        # Handle image display
-        if image_url:
-            if image_url.startswith('http'):
-                embed.set_image(url=image_url)
-            elif os.path.exists(image_url):
-                # For local files, we'll handle this in the interaction response
-                pass
-        
+        # Update footer for collection navigation
         embed.set_footer(text=f"Card {index + 1} of {len(self.cards)} in collection")
         embed.timestamp = datetime.now()
         
@@ -142,6 +115,31 @@ class CollectionView(discord.ui.View):
             await interaction.response.edit_message(embed=embed, view=self)
         else:
             await interaction.response.defer()
+    
+    @discord.ui.button(label='🖼️ View Image', style=discord.ButtonStyle.success, emoji='🖼️')
+    async def image_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != interaction.message.interaction.user:
+            await interaction.response.send_message("❌ This is not your collection!", ephemeral=True)
+            return
+            
+        # Show full card with image using the main card info system
+        card = self.cards[self.current_index]
+        card_id = card[0]
+        
+        # Get full card data for the image display
+        self.trading_cards.cursor.execute("SELECT * FROM cards WHERE id = ?", (card_id,))
+        full_card = self.trading_cards.cursor.fetchone()
+        
+        if full_card:
+            embed, discord_file = self.trading_cards.create_card_embed(full_card, "showcase")
+            embed.title = f"🖼️ {card[1]} - Full Image View"
+            
+            if discord_file:
+                await interaction.response.send_message(embed=embed, file=discord_file, ephemeral=True)
+            else:
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ Card not found!", ephemeral=True)
     
     @discord.ui.button(label='🎲 Random', style=discord.ButtonStyle.success, emoji='🎲')
     async def random_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -425,8 +423,11 @@ class TradingCards(commands.Cog):
         self.conn.commit()
         
         # Send card
-        embed = self.create_card_embed(card, "daily")
-        await ctx.send(embed=embed)
+        embed, discord_file = self.create_card_embed(card, "daily")
+        if discord_file:
+            await ctx.send(embed=embed, file=discord_file)
+        else:
+            await ctx.send(embed=embed)
 
     @card_group.command(name='collection')
     async def view_collection(self, ctx, user: Optional[discord.Member] = None):
@@ -565,30 +566,8 @@ class TradingCards(commands.Cog):
             await ctx.send(f"❌ No card found matching '{card_name}'!")
             return
         
-        # Get basic stats
-        self.cursor.execute("SELECT COUNT(DISTINCT user_id) FROM user_cards WHERE card_id = ?", (card[0],))
-        unique_owners = self.cursor.fetchone()[0]
-        
-        # Create beautiful minimal showcase embed
-        embed = self.create_card_embed(card, "showcase")
-        
-        # Add minimal essential info only
-        embed.add_field(name="👥 Collectors", value=str(unique_owners), inline=True)
-        embed.add_field(name="🆔 ID", value=f"#{card[0]}", inline=True)
-        
-        # Handle image display beautifully
-        image_url = card[4]
-        discord_file = None
-        
-        if image_url:
-            if image_url.startswith('http'):
-                embed.set_image(url=image_url)
-            elif os.path.exists(image_url):
-                try:
-                    discord_file = discord.File(image_url, filename=f"card_{card[0]}.jpg")
-                    embed.set_image(url=f"attachment://card_{card[0]}.jpg")
-                except Exception as e:
-                    print(f"Error loading image file {image_url}: {e}")
+        # Create beautiful card showcase
+        embed, discord_file = self.create_card_embed(card, "showcase")
         
         # Send with proper image handling
         if discord_file:
@@ -866,8 +845,11 @@ class TradingCards(commands.Cog):
             if random.random() < 0.05:
                 card = self.get_random_card()
                 if card:
-                    embed = self.create_card_embed(card, "drop")
-                    message = await channel.send(embed=embed)
+                    embed, discord_file = self.create_card_embed(card, "drop")
+                    if discord_file:
+                        message = await channel.send(embed=embed, file=discord_file)
+                    else:
+                        message = await channel.send(embed=embed)
                     await message.add_reaction('🃏')
                     
                     def check(reaction, user):
@@ -880,12 +862,18 @@ class TradingCards(commands.Cog):
                         self.cursor.execute("INSERT INTO user_cards (user_id, card_id) VALUES (?, ?)", (user.id, card[0]))
                         self.conn.commit()
                         
-                        success_embed = self.create_card_embed(card, "claimed", {"user": user})
-                        await channel.send(embed=success_embed)
+                        success_embed, success_file = self.create_card_embed(card, "claimed", {"user": user})
+                        if success_file:
+                            await channel.send(embed=success_embed, file=success_file)
+                        else:
+                            await channel.send(embed=success_embed)
                         
                     except asyncio.TimeoutError:
-                        timeout_embed = self.create_card_embed(card, "claimed", {"status": "escaped"})
-                        await message.edit(embed=timeout_embed)
+                        timeout_embed, timeout_file = self.create_card_embed(card, "claimed", {"status": "escaped"})
+                        if timeout_file:
+                            await message.edit(embed=timeout_embed, attachments=[timeout_file])
+                        else:
+                            await message.edit(embed=timeout_embed)
 
     def set_drop_channel(self, guild_id: int, channel_id: int):
         """Set drop channel for a guild"""
@@ -974,7 +962,7 @@ class TradingCards(commands.Cog):
         return emojis.get(rarity, '⚪')
 
     def create_card_embed(self, card, context_type="display", extra_info=None):
-        """Create a beautiful card display embed"""
+        """Create a beautiful card display embed - Returns (embed, file) tuple"""
         # Handle different card tuple formats
         if len(card) == 7 and context_type == "collection":
             # Collection format: (id, name, description, rarity, image_url, created_at, count)
@@ -991,36 +979,23 @@ class TradingCards(commands.Cog):
             created_by = card[5] if len(card) > 5 else None
             created_at = card[6] if len(card) > 6 else None
             count = None
-        
-        # Different titles based on context
-        title_prefixes = {
-            "daily": "🎁 Daily Card Claimed!",
-            "drop": "🎁 Wild Card Appeared!",
-            "admin_drop": "🎯 Admin Card Drop!",
-            "claimed": "✅ Card Caught!",
-            "escaped": "💨 Card Escaped!",
-            "info": "🃏 Card Information",
-            "showcase": "✨ Card Showcase",
-            "display": "🃏 Trading Card"
-        }
-        
+
         # Handle special escaped context
         if extra_info and extra_info.get("status") == "escaped":
             context_type = "escaped"
         
-        title = title_prefixes.get(context_type, "🃏 Trading Card")
-        
-        # Create the embed with rarity-based styling
+        # Create the embed with card name as title and rarity-based color
         embed_color = self.get_rarity_color(rarity)
         if context_type == "escaped":
             embed_color = 0x808080  # Gray for escaped cards
             
+        # Use card name as title always
         embed = discord.Embed(
-            title=title,
+            title=name,
             color=embed_color
         )
         
-        # Card name as main description with rarity styling
+        # Add rarity stars and emoji to description
         rarity_stars = {
             'Common': "⭐",
             'Uncommon': "⭐⭐", 
@@ -1028,89 +1003,74 @@ class TradingCards(commands.Cog):
             'Legendary': "⭐⭐⭐⭐"
         }
         
-        # Special handling for different contexts
-        if context_type == "escaped":
-            card_display = f"**{name}** vanished into the void...\n{rarity_stars.get(rarity, '⭐')} {self.get_rarity_emoji(rarity)} {rarity}"
-            if description:
-                card_display += f"\n\n*{description}*"
-            card_display += "\n\n💨 *No one claimed it in time!*"
+        # Simple description with rarity
+        card_description = f"{rarity_stars.get(rarity, '⭐')} {self.get_rarity_emoji(rarity)} **{rarity}**"
+        if description:
+            card_description += f"\n\n*{description}*"
+            
+        # Add context-specific messages at the end
+        if context_type == "drop":
+            card_description += f"\n\n⚡ **React 🃏 to claim!**"
+        elif context_type == "admin_drop":
+            card_description += f"\n\n⚡ **React 🃏 to claim!**"
         elif context_type == "claimed" and extra_info and "user" in extra_info:
             user = extra_info["user"]
-            card_display = f"**{name}**\n{rarity_stars.get(rarity, '⭐')} {self.get_rarity_emoji(rarity)} {rarity}"
-            if description:
-                card_display += f"\n\n*{description}*"
-            card_display += f"\n\n🎉 **Caught by {user.mention}!**"
-        elif context_type == "drop":
-            card_display = f"**{name}** appeared!\n{rarity_stars.get(rarity, '⭐')} {self.get_rarity_emoji(rarity)} {rarity}"
-            if description:
-                card_display += f"\n\n*{description}*"
-            card_display += "\n\n⚡ **React 🃏 to claim!**"
-        elif context_type == "admin_drop":
-            card_display = f"**{name}** was dropped!\n{rarity_stars.get(rarity, '⭐')} {self.get_rarity_emoji(rarity)} {rarity}"
-            if description:
-                card_display += f"\n\n*{description}*"
-            card_display += "\n\n⚡ **React 🃏 to claim!**"
-        elif context_type == "showcase":
-            card_display = f"**{name}**\n{rarity_stars.get(rarity, '⭐')} {self.get_rarity_emoji(rarity)} {rarity}"
-            if description:
-                card_display += f"\n\n*{description}*"
-        else:
-            card_display = f"**{name}**\n{rarity_stars.get(rarity, '⭐')} {self.get_rarity_emoji(rarity)} {rarity}"
-            if description:
-                card_display += f"\n\n*{description}*"
-                
-        embed.description = card_display
-        
-        # Add beautiful fields based on context
-        if context_type == "daily":
-            embed.add_field(name="🎯 Daily Claim", value="✅ Claimed", inline=True)
-        elif context_type in ["drop", "admin_drop"]:
-            embed.add_field(name="🎲 How to Claim", value="React with 🃏", inline=True)
-        elif context_type == "claimed":
-            embed.add_field(name="🎊 Status", value="Successfully Caught!", inline=True)
+            card_description += f"\n\n🎉 **Caught by {user.mention}!**"
         elif context_type == "escaped":
-            embed.add_field(name="💸 Status", value="Escaped", inline=True)
+            card_description += f"\n\n💨 **Escaped unclaimed!**"
+        elif context_type == "daily":
+            card_description += f"\n\n🎁 **Daily card claimed!**"
+            
+        embed.description = card_description
         
-        # Only show rarity info for non-escaped cards
-        if context_type != "escaped":
-            rarity_info = {
-                'Common': "70% drop rate",
-                'Uncommon': "20% drop rate", 
-                'Rare': "8% drop rate",
-                'Legendary': "2% drop rate"
-            }
-            embed.add_field(name="📊 Rarity", value=rarity_info.get(rarity, "Unknown"), inline=True)
-        
-        # Add extra context-specific info
-        if extra_info:
-            for field_name, field_value in extra_info.items():
-                if field_name not in ["status", "user", "dropped_by", "time_taken"]:  # Skip already handled fields
-                    embed.add_field(name=field_name, value=field_value, inline=True)
-        
-        # Handle images beautifully
+        # Handle images and return file if needed
+        discord_file = None
         if image_url:
             if image_url.startswith('http'):
+                # URL image - set directly
                 embed.set_image(url=image_url)
-            else:
-                # For local files, we'll handle this in the calling function
-                pass
+            elif os.path.exists(image_url):
+                # Local file - create Discord file and reference it
+                try:
+                    file_extension = image_url.split('.')[-1] if '.' in image_url else 'jpg'
+                    filename = f"card_{card_id}.{file_extension}"
+                    discord_file = discord.File(image_url, filename=filename)
+                    embed.set_image(url=f"attachment://{filename}")
+                except Exception as e:
+                    print(f"Error loading image file {image_url}: {e}")
         
-        # Beautiful footer with card ID and creation info
-        if created_at:
-            try:
-                # Parse the timestamp
-                created_date = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
-                embed.set_footer(text=f"Card ID: {card_id} • Created {created_date.strftime('%B %d, %Y')}")
-            except:
-                embed.set_footer(text=f"Card ID: {card_id}")
-        else:
-            embed.set_footer(text=f"Card ID: {card_id}")
+        # Add minimal essential info fields under the image
+        if context_type == "collection" and count:
+            embed.add_field(name="🔢 Owned", value=f"x{count}", inline=True)
+        
+        if context_type in ["info", "showcase"]:
+            # Get collectors count for info display
+            self.cursor.execute("SELECT COUNT(DISTINCT user_id) FROM user_cards WHERE card_id = ?", (card_id,))
+            result = self.cursor.fetchone()
+            collectors = result[0] if result else 0
+            embed.add_field(name="👥 Collectors", value=str(collectors), inline=True)
+        
+        # Always show drop rate (except for escaped)
+        if context_type != "escaped":
+            rarity_rates = {
+                'Common': "70%",
+                'Uncommon': "20%", 
+                'Rare': "8%",
+                'Legendary': "2%"
+            }
+            embed.add_field(name="📊 Drop Rate", value=rarity_rates.get(rarity, "Unknown"), inline=True)
+        
+        # Card ID in all cases
+        embed.add_field(name="🆔 ID", value=f"#{card_id}", inline=True)
+        
+        # Simple footer
+        embed.set_footer(text=f"Trading Card #{card_id}")
         
         # Add timestamp for certain contexts
         if context_type in ["daily", "claimed"]:
             embed.timestamp = datetime.now()
             
-        return embed
+        return embed, discord_file
 
     @card_group.command(name='config')
     @commands.has_permissions(administrator=True)
@@ -1205,10 +1165,13 @@ class TradingCards(commands.Cog):
                 return
         
         # Create the drop embed
-        embed = self.create_card_embed(card, "admin_drop", {"dropped_by": ctx.author.mention})
+        embed, discord_file = self.create_card_embed(card, "admin_drop", {"dropped_by": ctx.author.mention})
         
         # Send to target channel
-        message = await channel.send(embed=embed)
+        if discord_file:
+            message = await channel.send(embed=embed, file=discord_file)
+        else:
+            message = await channel.send(embed=embed)
         await message.add_reaction('🃏')
         
         # Confirm to admin
@@ -1231,15 +1194,21 @@ class TradingCards(commands.Cog):
             self.conn.commit()
             
             # Success message
-            success_embed = self.create_card_embed(card, "claimed", {"user": user})
-            await channel.send(embed=success_embed)
+            success_embed, success_file = self.create_card_embed(card, "claimed", {"user": user})
+            if success_file:
+                await channel.send(embed=success_embed, file=success_file)
+            else:
+                await channel.send(embed=success_embed)
             
             print(f"Manual drop: {user.name} claimed {card[1]} in {channel.name} (dropped by {ctx.author.name})")
             
         except asyncio.TimeoutError:
             # Timeout - card escaped
-            timeout_embed = self.create_card_embed(card, "claimed", {"status": "escaped"})
-            await message.edit(embed=timeout_embed)
+            timeout_embed, timeout_file = self.create_card_embed(card, "claimed", {"status": "escaped"})
+            if timeout_file:
+                await message.edit(embed=timeout_embed, attachments=[timeout_file])
+            else:
+                await message.edit(embed=timeout_embed)
 
     @card_group.command(name='droprate')
     @commands.has_permissions(administrator=True)
