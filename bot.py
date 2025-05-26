@@ -3607,7 +3607,6 @@ async def quarantine_user(interaction: discord.Interaction, user: discord.Member
         }
         
         # Add expiry time if minutes is specified
-        end_time = None
         if minutes > 0:
             end_time = current_time + datetime.timedelta(minutes=minutes)
             quarantine_data[guild_id][user_id]["end_time"] = str(end_time)
@@ -3638,120 +3637,6 @@ async def quarantine_user(interaction: discord.Interaction, user: discord.Member
             for role in user.roles:
                 if not role.is_default():
                     await user.remove_roles(role, reason=f"Quarantine: {reason}")
-        except Exception as e:
-            await interaction.followup.send(f"Warning: Could not remove all roles: {str(e)}", ephemeral=True)
-            
-        # Send notification to the quarantine channel
-        try:
-            embed = discord.Embed(
-                title="🔒 NEW INMATE ARRIVED",
-                description=f"{user.mention} has been quarantined!",
-                color=discord.Color.red()
-            )
-            embed.add_field(name="Reason", value=reason, inline=True)
-            embed.add_field(name="Quarantined by", value=interaction.user.mention, inline=True)
-            
-            if minutes > 0:
-                embed.add_field(name="Duration", value=f"{minutes} minutes", inline=True)
-                embed.set_footer(text=f"Will be auto-released at {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
-            else:
-                embed.set_footer(text="Indefinite quarantine - manual release required")
-                
-            embed.set_thumbnail(url=user.display_avatar.url)
-            await quarantine_channel.send(embed=embed)
-            
-            # Also send to jail-cam if public viewing is enabled
-            if public:
-                jail_cam_channel = discord.utils.get(interaction.guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
-                if jail_cam_channel:
-                    await jail_cam_channel.send(embed=embed)
-        except Exception as e:
-            await interaction.followup.send(f"Warning: Could not send notification: {str(e)}", ephemeral=True)
-            
-        # Log to mod-logs
-        try:
-            log_channel = discord.utils.get(interaction.guild.text_channels, name="mod-logs")
-            if log_channel:
-                log_embed = discord.Embed(
-                    title="🔒 User Quarantined",
-                    description=f"{user.mention} has been placed in quarantine.",
-                    color=discord.Color.orange(),
-                    timestamp=current_time
-                )
-                log_embed.add_field(name="User", value=f"{user} ({user.id})", inline=True)
-                log_embed.add_field(name="Moderator", value=f"{interaction.user} ({interaction.user.id})", inline=True)
-                log_embed.add_field(name="Reason", value=reason, inline=True)
-                if minutes > 0:
-                    log_embed.add_field(name="Duration", value=f"{minutes} minutes", inline=True)
-                log_embed.set_thumbnail(url=user.display_avatar.url)
-                await log_channel.send(embed=log_embed)
-        except Exception as e:
-            print(f"Error logging quarantine: {e}")
-            
-        # Send final confirmation
-        await interaction.followup.send(f"✅ {user.mention} has been quarantined successfully.", ephemeral=False)
-            
-        # DM the user
-        try:
-            dm_embed = discord.Embed(
-                title="You have been quarantined",
-                description=f"You have been placed in quarantine in **{interaction.guild.name}**.",
-                color=discord.Color.red()
-            )
-            dm_embed.add_field(name="Reason", value=reason, inline=False)
-            if minutes > 0:
-                dm_embed.add_field(name="Duration", value=f"{minutes} minutes", inline=False)
-                dm_embed.set_footer(text=f"You will be automatically released at {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
-            else:
-                dm_embed.set_footer(text="You will remain in quarantine until a moderator releases you.")
-            await user.send(embed=dm_embed)
-        except:
-            # User might have DMs disabled
-                description=f"{user.mention} has been quarantined!",
-                color=discord.Color.red()
-            )
-            embed.add_field(name="Reason", value=reason, inline=True)
-            embed.add_field(name="Quarantined by", value=interaction.user.mention, inline=True)
-            
-            if minutes > 0:
-                embed.add_field(name="Duration", value=f"{minutes} minutes", inline=True)
-                embed.set_footer(text=f"Will be auto-released at {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
-            else:
-                embed.set_footer(text="Indefinite quarantine - manual release required")
-                
-            embed.set_thumbnail(url=user.display_avatar.url)
-            await quarantine_channel.send(embed=embed)
-            
-            # Also send to jail-cam if public viewing is enabled
-            if public:
-                jail_cam_channel = discord.utils.get(interaction.guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
-                if jail_cam_channel:
-                    await jail_cam_channel.send(embed=embed)
-        except Exception as e:
-            await interaction.followup.send(f"Warning: Could not send notification: {str(e)}", ephemeral=True)
-            
-        # Log to mod-logs
-        try:
-            log_channel = discord.utils.get(interaction.guild.text_channels, name="mod-logs")
-            if log_channel:
-                log_embed = discord.Embed(
-                    title="🔒 User Quarantined",
-                    description=f"{user.mention} has been placed in quarantine.",
-                    color=discord.Color.orange(),
-                    timestamp=current_time
-                )
-                log_embed.add_field(name="User", value=f"{user} ({user.id})", inline=True)
-                log_embed.add_field(name="Moderator", value=f"{interaction.user} ({interaction.user.id})", inline=True)
-                log_embed.add_field(name="Reason", value=reason, inline=True)
-                if minutes > 0:
-                    log_embed.add_field(name="Duration", value=f"{minutes} minutes", inline=True)
-                log_embed.set_thumbnail(url=user.display_avatar.url)
-                await log_channel.send(embed=log_embed)
-        except Exception as e:
-            print(f"Error logging quarantine: {e}")
-            
-        # Send final confirmation
-        await interaction.followup.send(f"✅ {user.mention} has been quarantined successfully.", ephemeral=False)ason}")
         except Exception as e:
             await interaction.followup.send(f"Warning: Could not remove all roles: {str(e)}", ephemeral=True)
         
