@@ -284,27 +284,25 @@ async def on_ready():
     for cmd in bot.tree.get_commands():
         print(f"Global command: {cmd.name} - {cmd.description}")
     
-    # Force sync commands to guilds
-    print("\nSyncing commands to guilds...")
-    for guild in bot.guilds:
-        try:
-            # First try to clear the command cache
-            print(f"Syncing to {guild.name} (ID: {guild.id})")
-            # Force clear commands first
-            bot.tree.clear_commands(guild=guild)
-            await bot.tree.sync(guild=guild)
-            
-            # Then add them back
-            commands = await bot.tree.sync(guild=guild)
-            print(f"Successfully synced {len(commands)} commands to {guild.name}")
-            print(f"Commands in {guild.name}: {[cmd.name for cmd in commands]}")
-            
-            # Check if quarantine commands are in the list
-            quarantine_cmds = [cmd for cmd in commands if cmd.name in ['quarantine', 'unquarantine', 'quarantinelist']]
-            print(f"Quarantine commands found: {[cmd.name for cmd in quarantine_cmds]}")
-        except Exception as e:
-            print(f"Failed to sync commands to {guild.name}: {e}")
+    # Sync commands globally - simpler and more reliable approach
+    print("\nSyncing commands globally...")
+    try:
+        # First sync globally
+        synced = await bot.tree.sync()
+        print(f"Successfully synced {len(synced)} commands globally")
+        print(f"Global commands: {[cmd.name for cmd in synced]}")
+        
+        # Check if important commands are in the list
+        quarantine_cmds = [cmd for cmd in synced if cmd.name in ['quarantine', 'unquarantine', 'quarantinelist', 'freshaccounts']]
+        print(f"Important commands found: {[cmd.name for cmd in quarantine_cmds]}")
+    except Exception as e:
+        print(f"Failed to sync commands globally: {e}")
     print("Command sync complete!")
+    
+    print("\nIMPORTANT: If slash commands aren't appearing in Discord:")
+    print("1. Make sure the bot has 'applications.commands' scope when added to servers")
+    print("2. It can take up to an hour for commands to appear in large servers")
+    print("3. Try removing and re-adding the bot to the server if needed")
 
 # Scheduled backup task
 async def scheduled_backup():
@@ -3975,7 +3973,7 @@ async def check_quarantine_expirations():
 async def before_quarantine_check():
     await bot.wait_until_ready()
 
-# Commands are automatically synced by Discord - no manual sync needed
+# Commands need to be synced with Discord's API to appear in the client
 
 # Fresh account settings command
 @bot.tree.command(name="freshaccounts", description="Configure fresh account detection settings")
