@@ -483,12 +483,17 @@ async def on_message(message):
     guild_id = str(message.guild.id)
     user_id = str(message.author.id)
     
-    # Mirror ALL messages from quarantined users to jail-cam channel
+    # Mirror messages from quarantined users to jail-cam channel if public viewing is enabled
     if guild_id in quarantine_data and user_id in quarantine_data[guild_id]:
-        # Find the jail-cam channel
-        jail_cam_channel = discord.utils.get(message.guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
+        # Check if public viewing is enabled for this user
+        user_data = quarantine_data[guild_id][user_id]
         
-        if jail_cam_channel:
+        # Only mirror if public_view is True
+        if user_data.get("public_view", False):
+            # Find the jail-cam channel
+            jail_cam_channel = discord.utils.get(message.guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
+            
+            if jail_cam_channel:
             # Format the message content
             content = message.content
             
