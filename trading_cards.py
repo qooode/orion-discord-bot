@@ -1030,8 +1030,8 @@ class TradingCards(commands.Cog):
             'Legendary': "⭐⭐⭐⭐"
         }
         
-        # Simple description with rarity
-        card_description = f"{rarity_stars.get(rarity, '⭐')} {self.get_rarity_emoji(rarity)} **{rarity}**"
+        # Clean description with rarity (no stars)
+        card_description = f"{self.get_rarity_emoji(rarity)} **{rarity}**"
         if description:
             card_description += f"\n\n*{description}*"
             
@@ -1045,16 +1045,16 @@ class TradingCards(commands.Cog):
             
         data_embed.description = card_description
         
-        # Add minimal essential info fields
+        # Add minimal essential info fields (stacked vertically)
         if context_type == "collection" and count:
-            data_embed.add_field(name="🔢 Owned", value=f"x{count}", inline=True)
+            data_embed.add_field(name="🔢 Owned", value=f"x{count}", inline=False)
         
         if context_type in ["info", "showcase"]:
             # Get collectors count for info display
             self.cursor.execute("SELECT COUNT(DISTINCT user_id) FROM user_cards WHERE card_id = ?", (card_id,))
             result = self.cursor.fetchone()
             collectors = result[0] if result else 0
-            data_embed.add_field(name="👥 Collectors", value=str(collectors), inline=True)
+            data_embed.add_field(name="👥 Collectors", value=str(collectors), inline=False)
         
         # Always show drop rate (except for escaped)
         if context_type != "escaped":
@@ -1064,10 +1064,10 @@ class TradingCards(commands.Cog):
                 'Rare': "8%",
                 'Legendary': "2%"
             }
-            data_embed.add_field(name="📊 Drop Rate", value=rarity_rates.get(rarity, "Unknown"), inline=True)
+            data_embed.add_field(name="📊 Drop Rate", value=rarity_rates.get(rarity, "Unknown"), inline=False)
         
         # Card ID in all cases
-        data_embed.add_field(name="🆔 ID", value=f"#{card_id}", inline=True)
+        data_embed.add_field(name="🆔 ID", value=f"#{card_id}", inline=False)
         
         # Simple footer
         data_embed.set_footer(text=f"Trading Card #{card_id}")
@@ -1076,12 +1076,16 @@ class TradingCards(commands.Cog):
         if context_type in ["daily"]:
             data_embed.timestamp = datetime.now()
         
-        # IMAGE EMBED - Separate embed for image
+        # IMAGE EMBED - Separate embed for image with professional styling
         image_embed = None
         discord_file = None
         
         if image_url:
-            image_embed = discord.Embed(color=embed_color)
+            image_embed = discord.Embed(
+                title="🖼️ Card Artwork", 
+                description="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                color=embed_color
+            )
             
             if image_url.startswith('http'):
                 # URL image - set directly
@@ -1096,6 +1100,12 @@ class TradingCards(commands.Cog):
                 except Exception as e:
                     print(f"Error loading image file {image_url}: {e}")
                     image_embed = None
+            
+            # Add professional footer to image embed
+            if image_embed:
+                image_embed.set_footer(
+                    text="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                )
             
         return data_embed, image_embed, discord_file
     
