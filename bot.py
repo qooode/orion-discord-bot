@@ -3241,7 +3241,7 @@ async def server_info(interaction: discord.Interaction):
     public="Whether to create a public jail-cam channel for everyone to view",
     quarantine_channel="Channel to restrict the user to (will be created if it doesn't exist)"
 )
-@app_commands.default_permissions(moderate_members=True)
+@app_commands.default_permissions(administrator=True)
 async def quarantine_user(interaction: discord.Interaction, user: discord.Member, 
                         reason: str, minutes: int = 0, public: bool = True,
                         quarantine_channel: Optional[discord.TextChannel] = None):
@@ -3424,7 +3424,7 @@ async def quarantine_user(interaction: discord.Interaction, user: discord.Member
 @app_commands.describe(
     user="The user to release from quarantine"
 )
-@app_commands.default_permissions(moderate_members=True)
+@app_commands.default_permissions(administrator=True)
 async def unquarantine_user(interaction: discord.Interaction, user: discord.Member):
     try:
         guild_id = str(interaction.guild.id)
@@ -3500,7 +3500,7 @@ async def unquarantine_user(interaction: discord.Interaction, user: discord.Memb
         await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
 
 @bot.tree.command(name="quarantinelist", description="List all currently quarantined users")
-@app_commands.default_permissions(moderate_members=True)
+@app_commands.default_permissions(administrator=True)
 async def quarantine_list(interaction: discord.Interaction):
     try:
         guild_id = str(interaction.guild.id)
