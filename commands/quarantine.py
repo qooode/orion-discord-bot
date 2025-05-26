@@ -3,6 +3,7 @@ import datetime
 import random
 import asyncio
 from discord import app_commands
+from discord.ext import tasks
 from typing import Optional
 
 from config import UTC, QUARANTINE_CHANNEL_NAME, JAIL_CAM_CHANNEL_NAME, PRISON_BREAK_STAGES, PRISON_BREAK_REWARDS, PRISON_BREAK_FAILURES, HELP_EMOJIS, SABOTAGE_EMOJIS
@@ -1052,6 +1053,122 @@ async def setup_quarantine_commands(bot):
             
         except Exception as e:
             await interaction.followup.send(f"❌ Manual trigger error: {str(e)}", ephemeral=True)
+
+    # ===== AUTOMATIC QUARANTINE TIMER SYSTEM =====
+    
+    @tasks.loop(minutes=1)
+    async def check_quarantine_expirations():
+        """Background task that automatically releases users when their quarantine time expires"""
+        try:
+            current_time = datetime.datetime.now(UTC)
+            guilds_to_check = list(quarantine_data.keys())
+            
+            for guild_id in guilds_to_check:
+                guild = bot.get_guild(int(guild_id))
+                if not guild:
+                    continue
+                    
+                users_to_unquarantine = []
+                
+                # Get quarantined users (excluding server_settings)
+                quarantined_users = {k: v for k, v in quarantine_data[guild_id].items() if k != "server_settings"}
+                
+                # Find users whose quarantine has expired
+                for user_id, data in quarantined_users.items():
+                    if "end_time" in data:
+                        try:
+                            end_time = datetime.datetime.fromisoformat(data["end_time"].replace('Z', '+00:00'))
+                            if current_time >= end_time:
+                                users_to_unquarantine.append(user_id)
+                        except Exception as e:
+                            print(f"Error parsing end time for user {user_id}: {e}")
+                
+                # Unquarantine expired users
+                for user_id in users_to_unquarantine:
+                    try:
+                        # Get the user and their data
+                        member = await guild.fetch_member(int(user_id))
+                        user_data = quarantine_data[guild_id][user_id]
+                        saved_roles = user_data.get("roles", [])
+                        
+                        print(f"Auto-releasing {member.display_name} from quarantine in {guild.name}")
+                        
+                        # Reset channel permissions
+                        for channel in guild.channels:
+                            try:
+                                await channel.set_permissions(member, overwrite=None, reason="Auto-released from timed quarantine")
+                            except:
+                                pass
+                        
+                        # Restore roles
+                        for role_id in saved_roles:
+                            role = guild.get_role(int(role_id))
+                            if role:
+                                try:
+                                    await member.add_roles(role, reason="Auto-released from timed quarantine")
+                                except:
+                                    pass
+                        
+                        # Remove from quarantine data
+                        del quarantine_data[guild_id][user_id]
+                        save_quarantine_data(quarantine_data)
+                        
+                        # DM the user
+                        try:
+                            await member.send(f"You have been automatically released from quarantine in **{guild.name}**. Your access has been restored.")
+                        except:
+                            pass
+                        
+                        # Log to mod-logs
+                        log_channel = discord.utils.get(guild.text_channels, name="mod-logs")
+                        if log_channel:
+                            embed = discord.Embed(
+                                title="🔓 User Auto-Released from Quarantine",
+                                description=f"<@{user_id}> has been automatically released from quarantine (timer expired).",
+                                color=discord.Color.green(),
+                                timestamp=current_time
+                            )
+                            embed.add_field(name="User", value=f"<@{user_id}> ({user_id})", inline=True)
+                            embed.set_footer(text="Automatic timed release")
+                            await log_channel.send(embed=embed)
+                        
+                        # Also announce it in the jail-cam channel
+                        jail_cam_channel = get_jail_cam_channel(guild)
+                        if jail_cam_channel:
+                            freedom_messages = [
+                                f"🔓 **FREEDOM!** {member.mention} has served their time and been released!",
+                                f"🕊️ {member.mention} has been set free! Their sentence is complete.",
+                                f"⏱️ Time's up! {member.mention} has been released from quarantine.",
+                                f"🎉 Congratulations {member.mention}! You're free to go!",
+                                f"🚪 The cell door opens... {member.mention} walks free once more!"
+                            ]
+                            freedom_message = random.choice(freedom_messages)
+                            
+                            # Create a fancy embed for the jail-cam
+                            embed = discord.Embed(
+                                title="🔓 Prisoner Released",
+                                description=freedom_message,
+                                color=discord.Color.green(),
+                                timestamp=current_time
+                            )
+                            embed.set_thumbnail(url=member.display_avatar.url)
+                            embed.set_footer(text="They've done their time! Back to normal server access.")
+                            
+                            await jail_cam_channel.send(embed=embed)
+                            
+                    except Exception as e:
+                        print(f"Error auto-unquarantining user {user_id} in guild {guild.name}: {e}")
+        except Exception as e:
+            print(f"Error in quarantine expiration checker: {e}")
+
+    @check_quarantine_expirations.before_loop
+    async def before_quarantine_check():
+        await bot.wait_until_ready()
+
+    # Start the background task
+    if not check_quarantine_expirations.is_running():
+        check_quarantine_expirations.start()
+        print("✅ Quarantine expiration checker started!")
 
 # Prison Break Game Helper Functions
 
