@@ -588,53 +588,6 @@ async def on_message(message):
             else:
                 await message.channel.send(response)
 
-# Auto-moderation: Message filter
-@bot.event
-async def on_message(message):
-    # Don't process commands from the bot itself
-    if message.author == bot.user:
-        return
-    
-    # Process commands if any
-    await bot.process_commands(message)
-    
-    # Skip moderation in DMs
-    if not message.guild:
-        return
-    
-    # Auto-moderate content
-    content = message.content.lower()
-    
-    # Check for bad words
-    if any(word in content for word in BAD_WORDS):
-        await message.delete()
-        await message.channel.send(f"{message.author.mention}, please watch your language!", delete_after=5)
-        
-        # Auto-warn for bad language
-        guild_id = str(message.guild.id)
-        user_id = str(message.author.id)
-        
-        # Initialize guild and user in warnings_data if they don't exist
-        if guild_id not in warnings_data:
-            warnings_data[guild_id] = {}
-        if user_id not in warnings_data[guild_id]:
-            warnings_data[guild_id][user_id] = []
-        
-        # Add the warning
-        warning = {
-            "reason": "Automatic warning for inappropriate language",
-            "timestamp": str(datetime.datetime.now(UTC)),
-            "moderator": str(bot.user.id)
-        }
-        warnings_data[guild_id][user_id].append(warning)
-        save_warnings(warnings_data)
-        
-        # DM the user about the warning
-        try:
-            await message.author.send(f"You have been automatically warned in **{message.guild.name}** for inappropriate language.")
-        except:
-            pass  # Silently fail if DM cannot be sent
-
 # Member join event
 @bot.event
 async def on_member_join(member):
