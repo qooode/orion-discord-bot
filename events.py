@@ -727,12 +727,17 @@ from discord.ext import tasks
 @tasks.loop(minutes=1)
 async def check_quarantine_expirations():
     try:
+        print(f"🔍 Checking quarantine expirations at {datetime.datetime.now(UTC).strftime('%H:%M:%S')}")
         current_time = datetime.datetime.now(UTC)
         guilds_to_check = list(quarantine_data.keys())
+        
+        total_checked = 0
+        total_released = 0
         
         for guild_id in guilds_to_check:
             guild = bot.get_guild(int(guild_id))
             if not guild:
+                print(f"⚠️ Skipping guild {guild_id} - not found")
                 continue
                 
             users_to_unquarantine = []
@@ -743,14 +748,23 @@ async def check_quarantine_expirations():
                 if user_id == "server_settings":
                     continue
                     
+                total_checked += 1
+                
                 if "end_time" in data:
                     try:
-                        end_time = datetime.datetime.fromisoformat(data["end_time"].replace('Z', '+00:00'))
+                        end_time_str = data["end_time"]
+                        end_time = datetime.datetime.fromisoformat(end_time_str.replace('Z', '+00:00'))
+                        
                         if current_time >= end_time:
                             users_to_unquarantine.append(user_id)
-                            print(f"Quarantine expired for user {user_id} in guild {guild.name}")
+                            print(f"✅ Quarantine expired for user {user_id} in guild {guild.name} (expired {int((current_time - end_time).total_seconds())}s ago)")
+                        else:
+                            remaining = int((end_time - current_time).total_seconds())
+                            print(f"⏰ User {user_id} in {guild.name}: {remaining}s remaining")
+                            
                     except Exception as e:
-                        print(f"Error parsing end time for user {user_id}: {e}")
+                        print(f"❌ Error parsing end time for user {user_id} in guild {guild.name}: {e}")
+                        print(f"   Raw end_time data: {data.get('end_time', 'None')}")
             
             # Unquarantine expired users
             for user_id in users_to_unquarantine:
@@ -760,75 +774,113 @@ async def check_quarantine_expirations():
                     user_data = quarantine_data[guild_id][user_id]
                     saved_roles = user_data.get("roles", [])
                     
-                    print(f"Auto-unquarantining {member.display_name} in {guild.name}")
+                    print(f"🔓 Auto-unquarantining {member.display_name} ({user_id}) in {guild.name}")
                     
                     # Reset channel permissions
+                    permissions_reset = 0
                     for channel in guild.channels:
                         try:
                             await channel.set_permissions(member, overwrite=None, reason="Auto-released from timed quarantine")
-                        except:
-                            pass
+                            permissions_reset += 1
+                        except Exception as e:
+                            print(f"   ⚠️ Failed to reset permissions for channel {channel.name}: {e}")
+                    
+                    print(f"   📝 Reset permissions for {permissions_reset} channels")
                     
                     # Restore roles
+                    roles_restored = 0
+                    roles_failed = 0
                     for role_id in saved_roles:
                         role = guild.get_role(int(role_id))
                         if role:
                             try:
                                 await member.add_roles(role, reason="Auto-released from timed quarantine")
-                            except:
-                                pass
+                                roles_restored += 1
+                            except Exception as e:
+                                print(f"   ⚠️ Failed to restore role {role.name}: {e}")
+                                roles_failed += 1
+                        else:
+                            print(f"   ⚠️ Role with ID {role_id} no longer exists")
+                            roles_failed += 1
+                    
+                    print(f"   🎭 Restored {roles_restored} roles, failed {roles_failed}")
                     
                     # Remove from quarantine data
                     del quarantine_data[guild_id][user_id]
                     save_quarantine_data(quarantine_data)
+                    total_released += 1
                     
                     # DM the user
                     try:
                         await member.send(f"You have been automatically released from quarantine in **{guild.name}**. Your access has been restored.")
-                    except:
-                        pass
+                        print(f"   📧 DM sent to user")
+                    except Exception as e:
+                        print(f"   ⚠️ Failed to DM user: {e}")
                     
                     # Log to mod-logs
-                    log_channel = discord.utils.get(guild.text_channels, name="mod-logs")
-                    if log_channel:
-                        embed = discord.Embed(
-                            title="🔓 User Auto-Released from Quarantine",
-                            description=f"<@{user_id}> has been automatically released from quarantine (timer expired).",
-                            color=discord.Color.green(),
-                            timestamp=current_time
-                        )
-                        embed.add_field(name="User", value=f"<@{user_id}> ({user_id})", inline=True)
-                        embed.set_footer(text="Automatic timed release")
-                        await log_channel.send(embed=embed)
+                    try:
+                        log_channel = discord.utils.get(guild.text_channels, name="mod-logs")
+                        if log_channel:
+                            embed = discord.Embed(
+                                title="🔓 User Auto-Released from Quarantine",
+                                description=f"<@{user_id}> has been automatically released from quarantine (timer expired).",
+                                color=discord.Color.green(),
+                                timestamp=current_time
+                            )
+                            embed.add_field(name="User", value=f"<@{user_id}> ({user_id})", inline=True)
+                            embed.set_footer(text="Automatic timed release")
+                            await log_channel.send(embed=embed)
+                            print(f"   📝 Logged to mod-logs")
+                        else:
+                            print(f"   ⚠️ No mod-logs channel found")
+                    except Exception as e:
+                        print(f"   ⚠️ Failed to log to mod-logs: {e}")
                     
                     # Also announce it in the jail-cam channel
-                    jail_cam_channel = discord.utils.get(guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
-                    if jail_cam_channel:
-                        freedom_messages = [
-                            f"🔓 **FREEDOM!** {member.mention} has served their time and been released!",
-                            f"🕊️ {member.mention} has been set free! Their sentence is complete.",
-                            f"⏱️ Time's up! {member.mention} has been released from quarantine.",
-                            f"🎉 Congratulations {member.mention}! You're free to go!",
-                            f"🚪 The cell door opens... {member.mention} walks free once more!"
-                        ]
-                        freedom_message = random.choice(freedom_messages)
-                        
-                        # Create a fancy embed for the jail-cam
-                        embed = discord.Embed(
-                            title="Prisoner Released",
-                            description=freedom_message,
-                            color=discord.Color.green(),
-                            timestamp=current_time
-                        )
-                        embed.set_thumbnail(url=member.display_avatar.url)
-                        embed.set_footer(text="They've done their time! Back to normal server access.")
-                        
-                        await jail_cam_channel.send(embed=embed)
+                    try:
+                        jail_cam_channel = discord.utils.get(guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
+                        if jail_cam_channel:
+                            freedom_messages = [
+                                f"🔓 **FREEDOM!** {member.mention} has served their time and been released!",
+                                f"🕊️ {member.mention} has been set free! Their sentence is complete.",
+                                f"⏱️ Time's up! {member.mention} has been released from quarantine.",
+                                f"🎉 Congratulations {member.mention}! You're free to go!",
+                                f"🚪 The cell door opens... {member.mention} walks free once more!"
+                            ]
+                            freedom_message = random.choice(freedom_messages)
+                            
+                            # Create a fancy embed for the jail-cam
+                            embed = discord.Embed(
+                                title="Prisoner Released",
+                                description=freedom_message,
+                                color=discord.Color.green(),
+                                timestamp=current_time
+                            )
+                            embed.set_thumbnail(url=member.display_avatar.url)
+                            embed.set_footer(text="They've done their time! Back to normal server access.")
+                            
+                            await jail_cam_channel.send(embed=embed)
+                            print(f"   📺 Announced release in jail-cam")
+                        else:
+                            print(f"   ⚠️ No jail-cam channel found")
+                    except Exception as e:
+                        print(f"   ⚠️ Failed to announce in jail-cam: {e}")
                         
                 except Exception as e:
-                    print(f"Error auto-unquarantining user {user_id}: {e}")
+                    print(f"❌ Error auto-unquarantining user {user_id} in guild {guild.name}: {e}")
+                    import traceback
+                    traceback.print_exc()
+        
+        # Summary logging
+        if total_checked > 0:
+            print(f"📊 Quarantine check complete: {total_checked} users checked, {total_released} released")
+        else:
+            print(f"📊 Quarantine check complete: No users with timers found")
+            
     except Exception as e:
-        print(f"Error in quarantine expiration task: {e}")
+        print(f"💥 Critical error in quarantine expiration task: {e}")
+        import traceback
+        traceback.print_exc()
 
 @check_quarantine_expirations.before_loop
 async def before_quarantine_check():

@@ -180,20 +180,28 @@ async def setup_quarantine_commands(bot):
             else:
                 embed.add_field(name="Duration", value="Until manually released", inline=True)
                 
-            # Add prison break game explanation
-            embed.add_field(
-                name="🎮 Prison Break Game", 
-                value=(
-                    "**Moderators can start escape games with `/prisonbreak start`**\n\n"
-                    "**Game Stages:**\n"
-                    "🔓 **Stage 1:** Type 4-digit combinations like `1-2-3-4`\n"
-                    "🕳️ **Stage 2:** Type directions: `north`, `south`, `east`, `west`\n"
-                    "👮 **Stage 3:** Type hiding spots: `behind tree`, `in shadows`, etc.\n"
-                    "🚗 **Stage 4:** Work together - all type the secret code word!\n\n"
-                    "**Success = Reduced sentence • Failure = Extended sentence**"
-                ), 
-                inline=False
-            )
+            # Only show prison break game explanation if there's an active game
+            active_prison_game = False
+            if guild_id in prison_break_data:
+                for game_id, game_data in prison_break_data[guild_id].items():
+                    if game_data.get("active", False):
+                        active_prison_game = True
+                        break
+            
+            if active_prison_game:
+                embed.add_field(
+                    name="🎮 Prison Break Game Active!", 
+                    value=(
+                        "**An escape game is currently running!**\n\n"
+                        "**Game Stages:**\n"
+                        "🔓 **Stage 1:** Type 4-digit combinations like `1-2-3-4`\n"
+                        "🕳️ **Stage 2:** Type directions: `north`, `south`, `east`, `west`\n"
+                        "👮 **Stage 3:** Type hiding spots: `behind tree`, `in shadows`, etc.\n"
+                        "🚗 **Stage 4:** Work together - all type the secret code word!\n\n"
+                        "**Success = Reduced sentence • Failure = Extended sentence**"
+                    ), 
+                    inline=False
+                )
             
             # Add footer with important info
             visibility = "visible to everyone in #jail-cam" if public else "only visible to moderators"
@@ -854,51 +862,196 @@ async def setup_quarantine_commands(bot):
             # Check users with timers
             timed_users = 0
             expired_users = 0
+            timer_details = []
             
             for user_id, data in quarantined_users.items():
                 if "end_time" in data:
                     timed_users += 1
                     try:
-                        end_time = datetime.datetime.fromisoformat(data["end_time"].replace('Z', '+00:00'))
+                        end_time_str = data["end_time"]
+                        # Parse the end time string
+                        end_time = datetime.datetime.fromisoformat(end_time_str.replace('Z', '+00:00'))
+                        time_remaining = end_time - current_time
+                        
                         if current_time >= end_time:
                             expired_users += 1
-                    except:
-                        pass
+                            status = "🔴 EXPIRED"
+                        else:
+                            status = f"⏰ {int(time_remaining.total_seconds())}s left"
+                        
+                        # Get user info
+                        try:
+                            member = interaction.guild.get_member(int(user_id))
+                            username = member.display_name if member else f"User {user_id}"
+                        except:
+                            username = f"User {user_id}"
+                        
+                        timer_details.append(f"**{username}:** {status}")
+                        
+                        # Add detailed time info for first 3 users
+                        if len(timer_details) <= 3:
+                            timer_details[-1] += f"\n  End: {end_time.strftime('%H:%M:%S')}"
+                            timer_details[-1] += f"\n  Raw: {end_time_str[:19]}"
+                        
+                    except Exception as e:
+                        timer_details.append(f"**User {user_id}:** ❌ Error parsing time: {str(e)}")
             
             embed.add_field(name="With Timers", value=str(timed_users), inline=True)
             embed.add_field(name="Should be Released", value=str(expired_users), inline=True)
             
-            # Show individual timer info
-            if timed_users > 0:
-                timer_info = ""
-                for user_id, data in quarantined_users.items():
-                    if "end_time" in data:
-                        try:
-                            end_time = datetime.datetime.fromisoformat(data["end_time"].replace('Z', '+00:00'))
-                            time_remaining = end_time - current_time
-                            status = "🔴 EXPIRED" if time_remaining.total_seconds() <= 0 else f"⏰ {int(time_remaining.total_seconds())}s left"
-                            
-                            member = interaction.guild.get_member(int(user_id))
-                            username = member.display_name if member else f"User {user_id}"
-                            
-                            timer_info += f"**{username}:** {status}\n"
-                        except Exception as e:
-                            timer_info += f"**User {user_id}:** ❌ Error parsing time\n"
-                
-                if len(timer_info) > 1024:
-                    timer_info = timer_info[:1020] + "..."
-                    
-                embed.add_field(name="Timer Details", value=timer_info or "No timer info available", inline=False)
+            # Check if we can access the bot instance to see if the task is running
+            try:
+                # Try to check if the task exists in the bot's tasks
+                running_tasks = [task for task in asyncio.all_tasks() if 'check_quarantine_expirations' in str(task)]
+                task_status = f"✅ Found {len(running_tasks)} timer task(s)" if running_tasks else "❌ No timer tasks found"
+            except:
+                task_status = "❓ Cannot determine task status"
             
-            # Check if expiration task is running
-            from events import check_quarantine_expirations
-            task_status = "✅ Running" if check_quarantine_expirations.is_running() else "❌ Not Running"
-            embed.add_field(name="Expiration Task Status", value=task_status, inline=False)
+            embed.add_field(name="Timer Task Status", value=task_status, inline=False)
+            
+            # Show timer details for individual users
+            if timer_details:
+                details_text = "\n".join(timer_details[:10])  # Show max 10 users
+                if len(timer_details) > 10:
+                    details_text += f"\n...and {len(timer_details) - 10} more"
+                
+                if len(details_text) > 1024:
+                    details_text = details_text[:1020] + "..."
+                    
+                embed.add_field(name="Timer Details", value=details_text, inline=False)
+            
+            # Add manual trigger option
+            if expired_users > 0:
+                embed.add_field(
+                    name="⚠️ Manual Action Needed", 
+                    value=f"There are {expired_users} users who should be auto-released but aren't. The timer might not be working properly.",
+                    inline=False
+                )
             
             await interaction.response.send_message(embed=embed, ephemeral=True)
             
         except Exception as e:
             await interaction.response.send_message(f"Debug error: {str(e)}", ephemeral=True)
+
+    @bot.tree.command(name="quarantinetrigger", description="Manually trigger quarantine expiration check (emergency use)")
+    @app_commands.default_permissions(administrator=True)
+    async def manual_quarantine_trigger(interaction: discord.Interaction):
+        try:
+            await interaction.response.defer(ephemeral=True)
+            
+            guild_id = str(interaction.guild.id)
+            current_time = datetime.datetime.now(UTC)
+            
+            # Check if guild has quarantine data
+            if guild_id not in quarantine_data:
+                await interaction.followup.send("❌ No quarantine data for this guild.", ephemeral=True)
+                return
+            
+            # Get quarantined users (excluding server_settings)
+            quarantined_users = {k: v for k, v in quarantine_data[guild_id].items() if k != "server_settings"}
+            
+            if not quarantined_users:
+                await interaction.followup.send("❌ No quarantined users found.", ephemeral=True)
+                return
+            
+            # Find users to unquarantine
+            users_to_unquarantine = []
+            results = []
+            
+            for user_id, data in quarantined_users.items():
+                if "end_time" in data:
+                    try:
+                        end_time = datetime.datetime.fromisoformat(data["end_time"].replace('Z', '+00:00'))
+                        if current_time >= end_time:
+                            users_to_unquarantine.append(user_id)
+                            results.append(f"✅ Will release: User {user_id}")
+                        else:
+                            time_remaining = int((end_time - current_time).total_seconds())
+                            results.append(f"⏰ User {user_id}: {time_remaining}s remaining")
+                    except Exception as e:
+                        results.append(f"❌ User {user_id}: Error parsing time - {str(e)}")
+                else:
+                    results.append(f"🔒 User {user_id}: No timer (indefinite)")
+            
+            if not users_to_unquarantine:
+                result_text = "\n".join(results[:10])
+                await interaction.followup.send(f"🔍 **Manual Check Complete**\n\nNo expired quarantines found.\n\n{result_text}", ephemeral=True)
+                return
+            
+            # Manually unquarantine expired users
+            released_count = 0
+            failed_releases = []
+            
+            for user_id in users_to_unquarantine:
+                try:
+                    # Get the user and their data
+                    member = await interaction.guild.fetch_member(int(user_id))
+                    user_data = quarantine_data[guild_id][user_id]
+                    saved_roles = user_data.get("roles", [])
+                    
+                    print(f"Manually unquarantining {member.display_name} in {interaction.guild.name}")
+                    
+                    # Reset channel permissions
+                    for channel in interaction.guild.channels:
+                        try:
+                            await channel.set_permissions(member, overwrite=None, reason="Manual release from expired quarantine")
+                        except:
+                            pass
+                    
+                    # Restore roles
+                    for role_id in saved_roles:
+                        role = interaction.guild.get_role(int(role_id))
+                        if role:
+                            try:
+                                await member.add_roles(role, reason="Manual release from expired quarantine")
+                            except:
+                                pass
+                    
+                    # Remove from quarantine data
+                    del quarantine_data[guild_id][user_id]
+                    save_quarantine_data(quarantine_data)
+                    
+                    released_count += 1
+                    
+                    # DM the user
+                    try:
+                        await member.send(f"You have been released from quarantine in **{interaction.guild.name}**. Your access has been restored.")
+                    except:
+                        pass
+                    
+                    # Log to mod-logs
+                    log_channel = discord.utils.get(interaction.guild.text_channels, name="mod-logs")
+                    if log_channel:
+                        embed = discord.Embed(
+                            title="🔓 User Manually Released from Quarantine",
+                            description=f"<@{user_id}> has been manually released from expired quarantine.",
+                            color=discord.Color.orange(),
+                            timestamp=current_time
+                        )
+                        embed.add_field(name="Released by", value=f"{interaction.user.mention}", inline=True)
+                        embed.add_field(name="Reason", value="Manual trigger - timer expired", inline=True)
+                        embed.set_footer(text="Manual quarantine release")
+                        await log_channel.send(embed=embed)
+                        
+                except Exception as e:
+                    failed_releases.append(f"User {user_id}: {str(e)}")
+                    print(f"Error manually unquarantining user {user_id}: {e}")
+            
+            # Send results
+            result_message = f"🔧 **Manual Trigger Complete**\n\n✅ **Released:** {released_count} users"
+            
+            if failed_releases:
+                result_message += f"\n❌ **Failed:** {len(failed_releases)} users"
+                if len(failed_releases) <= 3:
+                    result_message += f"\n{chr(10).join(failed_releases)}"
+            
+            if released_count > 0:
+                result_message += f"\n\n💡 **Note:** If the automatic timer isn't working, you may need to restart the bot."
+            
+            await interaction.followup.send(result_message, ephemeral=True)
+            
+        except Exception as e:
+            await interaction.followup.send(f"❌ Manual trigger error: {str(e)}", ephemeral=True)
 
 # Prison Break Game Helper Functions
 
