@@ -187,7 +187,7 @@ def save_quarantine_data(data):
         print(f"Error saving quarantine data: {e}")
 
 # Function to create a backup of all data files
-def create_backup():
+async def create_backup():
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_path = os.path.join(BACKUP_DIR, f"backup_{timestamp}")
     os.makedirs(backup_path, exist_ok=True)
@@ -199,7 +199,8 @@ def create_backup():
         CUSTOM_COMMANDS_FILE,
         SCHEDULED_TASKS_FILE,
         TEMP_VOICE_FILE,
-        FRESH_ACCOUNT_FILE
+        FRESH_ACCOUNT_FILE,
+        QUARANTINE_FILE
     ]
     
     for file in files_to_backup:
@@ -267,12 +268,10 @@ async def on_ready():
     await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="for spammers | !help"))
     
     # Setup recurring scheduled tasks
-    if not scheduled_backup.is_running():
-        scheduled_backup.start()
+    # Start the background tasks
+    bot.loop.create_task(scheduled_backup())
+    bot.loop.create_task(check_scheduled_tasks())
     
-    if not check_scheduled_tasks.is_running():
-        check_scheduled_tasks.start()
-        
     if not check_quarantine_expirations.is_running():
         check_quarantine_expirations.start()
     
@@ -291,30 +290,35 @@ async def on_ready():
 # Scheduled backup task
 async def scheduled_backup():
     while True:
-        # Create backup every 12 hours
-        await asyncio.sleep(12 * 60 * 60)  # 12 hours
-        backup_path = create_backup()
-        print(f"Scheduled backup created at {backup_path}")
-        
-        # Clean up old backups (keep last 7)
-        backup_folders = sorted([os.path.join(BACKUP_DIR, d) for d in os.listdir(BACKUP_DIR) 
-                               if os.path.isdir(os.path.join(BACKUP_DIR, d))])
-        if len(backup_folders) > 7:
-            for old_folder in backup_folders[:-7]:
-                try:
-                    for file in os.listdir(old_folder):
-                        os.remove(os.path.join(old_folder, file))
-                    os.rmdir(old_folder)
-                    print(f"Removed old backup: {old_folder}")
-                except Exception as e:
-                    print(f"Error removing old backup {old_folder}: {e}")
+        try:
+            # Create backup every 12 hours
+            await asyncio.sleep(12 * 60 * 60)  # 12 hours
+            backup_path = await create_backup()
+            print(f"Scheduled backup created at {backup_path}")
+            
+            # Clean up old backups (keep last 7)
+            backup_folders = sorted([os.path.join(BACKUP_DIR, d) for d in os.listdir(BACKUP_DIR) 
+                                   if os.path.isdir(os.path.join(BACKUP_DIR, d))])
+            if len(backup_folders) > 7:
+                for old_folder in backup_folders[:-7]:
+                    try:
+                        for file in os.listdir(old_folder):
+                            os.remove(os.path.join(old_folder, file))
+                        os.rmdir(old_folder)
+                        print(f"Removed old backup: {old_folder}")
+                    except Exception as e:
+                        print(f"Error removing old backup {old_folder}: {e}")
+        except Exception as e:
+            print(f"Error in scheduled backup: {e}")
+            await asyncio.sleep(60)  # Wait a minute before retrying if there's an error
 
 # Check scheduled tasks
 async def check_scheduled_tasks():
     while True:
-        await asyncio.sleep(60)  # Check every minute
-        current_time = datetime.datetime.now(UTC)
-        tasks_to_remove = []
+        try:
+            await asyncio.sleep(60)  # Check every minute
+            current_time = datetime.datetime.now(UTC)
+            tasks_to_remove = []
         
         for i, task in enumerate(scheduled_tasks_data):
             try:
