@@ -6,7 +6,7 @@ import asyncio
 import re
 from typing import Optional, List, Union
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 # Define UTC timezone constant to fix deprecation warnings
