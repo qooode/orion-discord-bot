@@ -490,8 +490,15 @@ async def on_message(message):
         
         # Only mirror if public_view is True
         if user_data.get("public_view", False):
-            # Find the jail-cam channel
-            jail_cam_channel = discord.utils.get(message.guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
+            # Get the jail-cam channel ID from user data
+            jail_cam_channel_id = user_data.get("jail_cam_channel_id")
+            
+            # If no specific channel is set, try to find the default one
+            if not jail_cam_channel_id:
+                jail_cam_channel = discord.utils.get(message.guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
+            else:
+                # Get the channel by ID
+                jail_cam_channel = message.guild.get_channel(int(jail_cam_channel_id))
             
             if jail_cam_channel:
                 # Format the message content
@@ -519,6 +526,8 @@ async def on_message(message):
                     print(f"Successfully mirrored message from {message.author.name} to jail-cam")
                 except Exception as e:
                     print(f"Failed to mirror message to jail-cam: {e}")
+                    # Try to log more details about why mirroring failed
+                    print(f"jail-cam channel: {jail_cam_channel}, public_view: {user_data.get('public_view')}, user: {message.author.name}")
                     
                 # Debug log
                 print(f"Quarantined user {message.author.name} said: {content} in #{message.channel.name}") 
@@ -3253,13 +3262,15 @@ async def server_info(interaction: discord.Interaction):
     user="The user to quarantine",
     reason="Reason for quarantine",
     minutes="Minutes to keep user quarantined (0 for indefinite)",
-    public="Whether to create a public jail-cam channel for everyone to view",
-    quarantine_channel="Channel to restrict the user to (will be created if it doesn't exist)"
+    public="Whether to mirror messages to a public channel for everyone to view",
+    quarantine_channel="Channel to restrict the user to (will be created if it doesn't exist)",
+    jail_cam_channel="Channel to mirror quarantined user messages to (only used if public=True)"
 )
 @app_commands.default_permissions(administrator=True)
 async def quarantine_user(interaction: discord.Interaction, user: discord.Member, 
                         reason: str, minutes: int = 0, public: bool = True,
-                        quarantine_channel: Optional[discord.TextChannel] = None):
+                        quarantine_channel: Optional[discord.TextChannel] = None,
+                        jail_cam_channel: Optional[discord.TextChannel] = None):
     try:
         # Don't allow quarantining admins or mods
         if user.guild_permissions.administrator or user.guild_permissions.moderate_members:
@@ -3287,20 +3298,26 @@ async def quarantine_user(interaction: discord.Interaction, user: discord.Member
             if not quarantine_channel:
                 quarantine_channel = await interaction.guild.create_text_channel(QUARANTINE_CHANNEL_NAME, category=quarantine_category)
                 
-            # Find or create public jail-cam channel if enabled
-            jail_cam_channel = None
+            # Handle public jail-cam channel if enabled
+            jail_cam_channel_id = None
             if public:
-                jail_cam_category = discord.utils.get(interaction.guild.categories, name="Public")
-                if not jail_cam_category:
-                    jail_cam_category = await interaction.guild.create_category("Public")
-                    
-                jail_cam_channel = discord.utils.get(interaction.guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
-                if not jail_cam_channel:
-                    jail_cam_channel = await interaction.guild.create_text_channel(
-                        JAIL_CAM_CHANNEL_NAME,
-                        category=jail_cam_category,
-                        topic="See what quarantined users are saying!"
-                    )
+                # If a specific jail-cam channel was provided, use it
+                if jail_cam_channel:
+                    jail_cam_channel_id = str(jail_cam_channel.id)
+                else:
+                    # Otherwise create or find the default jail-cam channel
+                    jail_cam_category = discord.utils.get(interaction.guild.categories, name="Public")
+                    if not jail_cam_category:
+                        jail_cam_category = await interaction.guild.create_category("Public")
+                        
+                    default_jail_cam = discord.utils.get(interaction.guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
+                    if not default_jail_cam:
+                        default_jail_cam = await interaction.guild.create_text_channel(
+                            JAIL_CAM_CHANNEL_NAME,
+                            category=jail_cam_category,
+                            topic="See what quarantined users are saying!"
+                        )
+                    jail_cam_channel_id = str(default_jail_cam.id)
         
         # Save user's current roles
         user_roles = [role.id for role in user.roles if not role.is_default()]
@@ -3313,7 +3330,8 @@ async def quarantine_user(interaction: discord.Interaction, user: discord.Member
             "reason": reason,
             "timestamp": str(current_time),
             "channel_id": str(quarantine_channel.id),
-            "public_view": public
+            "public_view": public,
+            "jail_cam_channel_id": jail_cam_channel_id
         }
         
         # Add expiry time if minutes is specified
