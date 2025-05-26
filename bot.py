@@ -494,34 +494,34 @@ async def on_message(message):
             jail_cam_channel = discord.utils.get(message.guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
             
             if jail_cam_channel:
-            # Format the message content
-            content = message.content
-            
-            # Create a nice embed for the mirrored message
-            embed = discord.Embed(
-                description=content if content else "(No message content)",
-                color=discord.Color.dark_gray(),
-                timestamp=message.created_at
-            )
-            embed.set_author(name=f"{message.author.display_name} (Quarantined)", icon_url=message.author.display_avatar.url)
-            
-            # Add channel info so we know where it was posted
-            embed.add_field(name="Channel", value=f"#{message.channel.name}", inline=True)
-            
-            # Include any attachments
-            if message.attachments:
-                attachment_urls = "\n".join([f"[{attachment.filename}]({attachment.url})" for attachment in message.attachments])
-                embed.add_field(name="Attachments", value=attachment_urls)
-            
-            # Send to jail-cam with better error handling
-            try:
-                await jail_cam_channel.send(embed=embed)
-                print(f"Successfully mirrored message from {message.author.name} to jail-cam")
-            except Exception as e:
-                print(f"Failed to mirror message to jail-cam: {e}")
+                # Format the message content
+                content = message.content
                 
-            # Debug log
-            print(f"Quarantined user {message.author.name} said: {content} in #{message.channel.name}") 
+                # Create a nice embed for the mirrored message
+                embed = discord.Embed(
+                    description=content if content else "(No message content)",
+                    color=discord.Color.dark_gray(),
+                    timestamp=message.created_at
+                )
+                embed.set_author(name=f"{message.author.display_name} (Quarantined)", icon_url=message.author.display_avatar.url)
+                
+                # Add channel info so we know where it was posted
+                embed.add_field(name="Channel", value=f"#{message.channel.name}", inline=True)
+                
+                # Include any attachments
+                if message.attachments:
+                    attachment_urls = "\n".join([f"[{attachment.filename}]({attachment.url})" for attachment in message.attachments])
+                    embed.add_field(name="Attachments", value=attachment_urls)
+                
+                # Send to jail-cam with better error handling
+                try:
+                    await jail_cam_channel.send(embed=embed)
+                    print(f"Successfully mirrored message from {message.author.name} to jail-cam")
+                except Exception as e:
+                    print(f"Failed to mirror message to jail-cam: {e}")
+                    
+                # Debug log
+                print(f"Quarantined user {message.author.name} said: {content} in #{message.channel.name}") 
 
     # Process commands AFTER checking quarantine status
     await bot.process_commands(message)
