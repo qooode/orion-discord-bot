@@ -62,8 +62,8 @@ def main():
     print(f"Python version: {sys.version.split()[0]}")
     print(f"Command prefix: {PREFIX}")
     print("🔧 Loading modular architecture...")
-    print("📦 Modules: config, data_manager, events, moderation, utility, mass_moderation, quarantine")
-    print("⚡ Features: Basic moderation, purgewords, quarantine system, prison break games")
+    print("📦 Modules: config, data_manager, events, moderation, utility, mass_moderation, quarantine, trading_cards")
+    print("⚡ Features: Basic moderation, purgewords, quarantine system, prison break games, trading card system")
     print("================================\n")
     
     # Create the bot

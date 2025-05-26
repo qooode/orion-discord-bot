@@ -32,6 +32,14 @@ def setup_events(bot):
         except Exception as e:
             print(f"❌ Error loading command modules: {e}")
         
+        # Setup trading cards cog
+        print("🃏 Loading trading cards system...")
+        try:
+            await bot.load_extension('trading_cards')
+            print("✅ Trading cards system loaded successfully!")
+        except Exception as e:
+            print(f"❌ Error loading trading cards: {e}")
+        
         # Set initial presence
         await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="for spammers | !help"))
         
