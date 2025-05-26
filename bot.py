@@ -3975,17 +3975,7 @@ async def check_quarantine_expirations():
 async def before_quarantine_check():
     await bot.wait_until_ready()
 
-# Simple command to sync commands
-@bot.command(name="sync")
-async def sync(ctx):
-    """Syncs the slash commands to the current guild"""
-    try:
-        await ctx.send("Syncing commands...")
-        await bot.tree.sync(guild=ctx.guild)
-        commands = await bot.tree.fetch_commands(guild=ctx.guild)
-        await ctx.send(f"Done! {len(commands)} commands synced")
-    except Exception as e:
-        await ctx.send(f"Error: {str(e)}")
+# Commands are automatically synced by Discord - no manual sync needed
 
 # Fresh account settings command
 @bot.tree.command(name="freshaccounts", description="Configure fresh account detection settings")
