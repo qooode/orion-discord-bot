@@ -59,6 +59,13 @@ TEMP_VOICE_FILE = 'temp_voice.json'
 # File to store fresh account settings
 FRESH_ACCOUNT_FILE = 'fresh_accounts.json'
 
+# File to store quarantined user data
+QUARANTINE_FILE = 'quarantine.json'
+
+# Quarantine channel names
+QUARANTINE_CHANNEL_NAME = 'quarantine-room'
+JAIL_CAM_CHANNEL_NAME = 'jail-cam'
+
 # Backup directory
 BACKUP_DIR = 'backups'
 
@@ -159,6 +166,25 @@ def save_fresh_account_settings(data):
             json.dump(data, f, indent=4)
     except Exception as e:
         print(f"Error saving fresh account settings: {e}")
+        
+# Function to load quarantined users
+def load_quarantine_data():
+    try:
+        if os.path.exists(QUARANTINE_FILE):
+            with open(QUARANTINE_FILE, 'r') as f:
+                return json.load(f)
+        return {}
+    except Exception as e:
+        print(f"Error loading quarantine data: {e}")
+        return {}
+        
+# Function to save quarantined users
+def save_quarantine_data(data):
+    try:
+        with open(QUARANTINE_FILE, 'w') as f:
+            json.dump(data, f, indent=4)
+    except Exception as e:
+        print(f"Error saving quarantine data: {e}")
 
 # Function to create a backup of all data files
 def create_backup():
@@ -220,6 +246,7 @@ scheduled_tasks_data = load_scheduled_tasks()
 temp_voice_data = load_temp_voice()
 nickname_filters_data = load_nickname_filters()
 fresh_account_settings = load_fresh_account_settings()
+quarantine_data = load_quarantine_data()
 
 # Set up intents for the bot
 intents = discord.Intents.default()
@@ -411,16 +438,47 @@ async def on_voice_state_update(member, before, after):
 # Custom commands handler
 @bot.event
 async def on_message(message):
-    # Don't process commands from the bot itself
-    if message.author == bot.user:
+    # Skip if message is from bot
+    if message.author.bot:
         return
     
-    # Process commands if any
+    # Process commands
     await bot.process_commands(message)
     
     # Skip DMs
     if not message.guild:
         return
+    
+    # Check if message is from a quarantined user
+    guild_id = str(message.guild.id)
+    user_id = str(message.author.id)
+    
+    if guild_id in quarantine_data and user_id in quarantine_data[guild_id]:
+        user_data = quarantine_data[guild_id][user_id]
+        
+        # Check if this is a quarantine channel and public viewing is enabled
+        if str(message.channel.id) == user_data.get("channel_id") and user_data.get("public_view", False):
+            # Mirror message to jail-cam channel
+            jail_cam_channel = discord.utils.get(message.guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
+            
+            if jail_cam_channel:
+                # Format the message for jail-cam
+                content = message.content
+                
+                # Create a nice embed for the mirrored message
+                embed = discord.Embed(
+                    description=content,
+                    color=discord.Color.dark_gray(),
+                    timestamp=message.created_at
+                )
+                embed.set_author(name=f"{message.author.display_name} (Quarantined)", icon_url=message.author.display_avatar.url)
+                
+                # Include any attachments
+                if message.attachments:
+                    embed.add_field(name="Attachments", value=f"{len(message.attachments)} attachment(s) not shown")
+                
+                # Send to jail-cam
+                await jail_cam_channel.send(embed=embed)
     
     # Auto-moderate content (from earlier code)
     content = message.content.lower()
@@ -2763,6 +2821,22 @@ async def nickfilters(interaction: discord.Interaction):
     except Exception as e:
         await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
 
+@bot.tree.command(name="disablenickfilters", description="Disable all nickname filters")
+@app_commands.default_permissions(administrator=True)
+async def disable_nick_filters(interaction: discord.Interaction):
+    try:
+        # Get guild ID
+        guild_id = str(interaction.guild.id)
+        
+        # Clear filters for this guild
+        if guild_id in nickname_filters_data:
+            nickname_filters_data[guild_id] = {}
+            save_nickname_filters(nickname_filters_data)
+            
+        await interaction.response.send_message("✅ All nickname filters have been disabled!", ephemeral=False)
+    except Exception as e:
+        await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
+
 @bot.tree.command(name="nickfilterremove", description="Remove a nickname filter pattern")
 @app_commands.describe(pattern_number="Pattern number to remove (use /nickfilters to see numbers)")
 @app_commands.default_permissions(manage_nicknames=True)
@@ -3008,6 +3082,20 @@ async def ratelimit(interaction: discord.Interaction, messages: int, seconds: in
             action_text += " for 10 minutes"
             
         await interaction.response.send_message(f"Rate limit set: {messages} messages in {seconds} seconds will trigger: {action_text}", ephemeral=False)
+            
+    except Exception as e:
+        await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
+
+# Disable rate limit command
+@bot.tree.command(name="noratelimit", description="Disable message rate limiting")
+@app_commands.default_permissions(administrator=True)
+async def disable_ratelimit(interaction: discord.Interaction):
+    try:
+        # Remove rate limit settings
+        if hasattr(bot, 'rate_limit'):
+            bot.rate_limit = None
+            
+        await interaction.response.send_message("✅ Message rate limiting has been disabled!", ephemeral=False)
             
     except Exception as e:
         await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
@@ -3418,12 +3506,758 @@ async def server_info(interaction: discord.Interaction):
     except Exception as e:
         await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
 
+# User quarantine commands
+@bot.tree.command(name="quarantine", description="Quarantine a user by restricting them to a specific channel")
+@app_commands.describe(
+    user="The user to quarantine",
+    reason="Reason for quarantine",
+    minutes="Minutes to keep user quarantined (0 for indefinite)",
+    public="Whether to create a public jail-cam channel for everyone to view",
+    quarantine_channel="Channel to restrict the user to (will be created if it doesn't exist)"
+)
+@app_commands.default_permissions(moderate_members=True)
+async def quarantine_user(interaction: discord.Interaction, user: discord.Member, 
+                        reason: str, minutes: int = 0, public: bool = True,
+                        quarantine_channel: Optional[discord.TextChannel] = None):
+    try:
+        # Don't allow quarantining admins or mods
+        if user.guild_permissions.administrator or user.guild_permissions.moderate_members:
+            await interaction.response.send_message("⚠️ Cannot quarantine administrators or moderators.", ephemeral=True)
+            return
+            
+        guild_id = str(interaction.guild.id)
+        user_id = str(user.id)
+        
+        # Create or get the quarantine data structure
+        if guild_id not in quarantine_data:
+            quarantine_data[guild_id] = {}
+            
+        # Create the quarantine channel if it doesn't exist
+        if not quarantine_channel:
+            # Find or create Quarantine category
+            quarantine_category = discord.utils.get(interaction.guild.categories, name="Quarantine")
+            if not quarantine_category:
+                quarantine_category = await interaction.guild.create_category("Quarantine")
+                # Deny view permissions for everyone
+                await quarantine_category.set_permissions(interaction.guild.default_role, view_channel=False)
+                
+            # Find or create quarantine channel
+            quarantine_channel = discord.utils.get(interaction.guild.text_channels, name=QUARANTINE_CHANNEL_NAME, category=quarantine_category)
+            if not quarantine_channel:
+                quarantine_channel = await interaction.guild.create_text_channel(QUARANTINE_CHANNEL_NAME, category=quarantine_category)
+                
+            # Find or create public jail-cam channel if enabled
+            jail_cam_channel = None
+            if public:
+                jail_cam_category = discord.utils.get(interaction.guild.categories, name="Public")
+                if not jail_cam_category:
+                    jail_cam_category = await interaction.guild.create_category("Public")
+                    
+                jail_cam_channel = discord.utils.get(interaction.guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
+                if not jail_cam_channel:
+                    jail_cam_channel = await interaction.guild.create_text_channel(
+                        JAIL_CAM_CHANNEL_NAME,
+                        category=jail_cam_category,
+                        topic="See what quarantined users are saying!"
+                    )
+        
+        # Save user's current roles
+        user_roles = [role.id for role in user.roles if not role.is_default()]
+        
+        # Store quarantine data
+        current_time = datetime.datetime.now(UTC)
+        quarantine_data[guild_id][user_id] = {
+            "roles": user_roles,
+            "quarantined_by": str(interaction.user.id),
+            "reason": reason,
+            "timestamp": str(current_time),
+            "channel_id": str(quarantine_channel.id),
+            "public_view": public
+        }
+        
+        # Add expiry time if minutes is specified
+        if minutes > 0:
+            end_time = current_time + datetime.timedelta(minutes=minutes)
+            quarantine_data[guild_id][user_id]["end_time"] = str(end_time)
+        
+        # Save data
+        save_quarantine_data(quarantine_data)
+        
+        # Send response to confirm
+        await interaction.response.send_message(f"Processing quarantine for {user.mention}...", ephemeral=True)
+        
+        # Process actual quarantine - this might take time
+        await interaction.followup.send("Restricting channel access...", ephemeral=True)
+        
+        # Hide all channels from user except quarantine channel
+        for channel in interaction.guild.channels:
+            if channel.id != quarantine_channel.id:
+                try:
+                    await channel.set_permissions(user, view_channel=False, reason=f"Quarantine: {reason}")
+                except:
+                    pass
+                    
+        # Allow access to quarantine channel
+        await quarantine_channel.set_permissions(user, view_channel=True, read_messages=True, send_messages=True,
+                                              reason=f"Quarantine: {reason}")
+        
+        # Remove all roles
+        try:
+            for role in user.roles:
+                if not role.is_default():
+                    await user.remove_roles(role, reason=f"Quarantine: {reason}")
+        except Exception as e:
+            await interaction.followup.send(f"Warning: Could not remove all roles: {str(e)}", ephemeral=True)
+        
+        # Send stylish message in original channel (no mentions)
+        embed = discord.Embed(
+            title="🔒 PRISONER DETAINED",
+            description=f"A user has been thrown in the slammer!",
+            color=discord.Color.dark_red()
+        )
+        embed.add_field(name="Inmate", value=user.display_name, inline=True)
+        embed.add_field(name="Crime", value=reason, inline=True)
+        embed.add_field(name="Officer", value=interaction.user.display_name, inline=True)
+        
+        if minutes > 0:
+            embed.add_field(name="Sentence", value=f"{minutes} minutes (until {(current_time + datetime.timedelta(minutes=minutes)).strftime('%H:%M:%S')})", inline=False)
+        else:
+            embed.add_field(name="Sentence", value="Indefinite", inline=False)
+            
+        embed.set_thumbnail(url=user.display_avatar.url)
+        embed.set_footer(text="Justice has been served! Use /throw to throw items at them.")
+        
+        await interaction.followup.send(embed=embed, ephemeral=False)
+        
+        # Notify user
+        try:
+            await user.send(f"You have been quarantined in **{interaction.guild.name}**\n**Reason:** {reason}\n\nYou can only access the {quarantine_channel.mention} channel until a moderator releases you.")
+        except:
+            await interaction.followup.send("Could not DM the user about their quarantine.", ephemeral=True)
+            
+        # Send a cool embed to quarantine channel
+        embed = discord.Embed(
+            title="🔒 WELCOME TO JAIL 🔒",
+            description="You've been placed in quarantine!",
+            color=discord.Color.dark_red()
+        )
+        
+        # Add fields with all the important info
+        embed.add_field(name="Reason", value=reason, inline=False)
+        embed.add_field(name="Sentenced by", value=interaction.user.display_name, inline=True)
+        
+        if minutes > 0:
+            embed.add_field(name="Release Time", value=f"{minutes} minutes ({(current_time + datetime.timedelta(minutes=minutes)).strftime('%H:%M:%S')})", inline=True)
+        else:
+            embed.add_field(name="Duration", value="Until manually released", inline=True)
+            
+        # Add footer with important info
+        visibility = "visible to everyone in #jail-cam" if public else "only visible to moderators"
+        embed.set_footer(text=f"Your messages are {visibility} | Users can /throw items and give /challenge tasks")
+        
+        # Set user avatar as thumbnail
+        embed.set_thumbnail(url=user.display_avatar.url)
+        
+        # Send and pin
+        quarantine_msg = await quarantine_channel.send(content=f"Hey {user.mention}!", embed=embed)
+        
+        # No global announcements - jail-cam is just for mirroring messages
+        
+        # Pin the message
+        try:
+            await quarantine_msg.pin(reason="Quarantine notification")
+        except:
+            pass
+        
+        # Log to mod-logs
+        log_channel = discord.utils.get(interaction.guild.text_channels, name="mod-logs")
+        if log_channel:
+            embed = discord.Embed(
+                title="🔒 User Quarantined",
+                description=f"{user.mention} has been quarantined.",
+                color=discord.Color.red(),
+                timestamp=datetime.datetime.now(UTC)
+            )
+            embed.add_field(name="User", value=f"{user} ({user.id})", inline=True)
+            embed.add_field(name="Moderator", value=f"{interaction.user} ({interaction.user.id})", inline=True)
+            embed.add_field(name="Reason", value=reason, inline=False)
+            
+            if minutes > 0:
+                embed.add_field(name="Duration", value=f"{minutes} minutes (until {(current_time + datetime.timedelta(minutes=minutes)).strftime('%H:%M:%S')})", inline=True)
+            else:
+                embed.add_field(name="Duration", value="Indefinite", inline=True)
+                
+            embed.add_field(name="Quarantine Channel", value=quarantine_channel.mention, inline=False)
+            embed.set_thumbnail(url=user.display_avatar.url)
+            await log_channel.send(embed=embed)
+            
+    except Exception as e:
+        await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
+
+@bot.tree.command(name="unquarantine", description="Remove a user from quarantine and restore their permissions")
+@app_commands.describe(
+    user="The user to release from quarantine"
+)
+@app_commands.default_permissions(moderate_members=True)
+async def unquarantine_user(interaction: discord.Interaction, user: discord.Member):
+    try:
+        guild_id = str(interaction.guild.id)
+        user_id = str(user.id)
+        
+        # Check if user is quarantined
+        if guild_id not in quarantine_data or user_id not in quarantine_data[guild_id]:
+            await interaction.response.send_message(f"{user.mention} is not currently quarantined.", ephemeral=True)
+            return
+            
+        # Get quarantine data
+        user_data = quarantine_data[guild_id][user_id]
+        quarantine_channel_id = user_data.get("channel_id")
+        saved_roles = user_data.get("roles", [])
+        
+        await interaction.response.send_message(f"Processing release from quarantine for {user.mention}...", ephemeral=True)
+        
+        # Reset permissions for all channels
+        for channel in interaction.guild.channels:
+            try:
+                # Remove any specific overrides for this user
+                await channel.set_permissions(user, overwrite=None, reason="Released from quarantine")
+            except:
+                pass
+                
+        # Restore roles
+        try:
+            for role_id in saved_roles:
+                role = interaction.guild.get_role(int(role_id))
+                if role:
+                    await user.add_roles(role, reason="Released from quarantine")
+        except Exception as e:
+            await interaction.followup.send(f"Warning: Could not restore all roles: {str(e)}", ephemeral=True)
+            
+        # Remove from quarantine data
+        del quarantine_data[guild_id][user_id]
+        save_quarantine_data(quarantine_data)
+        
+        # Send stylish unquarantine message without mentions
+        embed = discord.Embed(
+            title="🔓 PRISONER RELEASED",
+            description=f"A user has been released from quarantine!",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="Former Inmate", value=user.display_name, inline=True)
+        embed.add_field(name="Released by", value=interaction.user.display_name, inline=True)
+        embed.set_thumbnail(url=user.display_avatar.url)
+        embed.set_footer(text="All access and roles have been restored.")
+        
+        await interaction.followup.send(embed=embed, ephemeral=False)
+        
+        # Notify user
+        try:
+            await user.send(f"You have been released from quarantine in **{interaction.guild.name}**. Your access has been restored.")
+        except:
+            pass
+            
+        # Log to mod-logs
+        log_channel = discord.utils.get(interaction.guild.text_channels, name="mod-logs")
+        if log_channel:
+            embed = discord.Embed(
+                title="🔓 User Released from Quarantine",
+                description=f"{user.mention} has been released from quarantine.",
+                color=discord.Color.green(),
+                timestamp=datetime.datetime.now(UTC)
+            )
+            embed.add_field(name="User", value=f"{user} ({user.id})", inline=True)
+            embed.add_field(name="Moderator", value=f"{interaction.user} ({interaction.user.id})", inline=True)
+            embed.set_thumbnail(url=user.display_avatar.url)
+            await log_channel.send(embed=embed)
+            
+    except Exception as e:
+        await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
+
+@bot.tree.command(name="quarantinelist", description="List all currently quarantined users")
+@app_commands.default_permissions(moderate_members=True)
+async def quarantine_list(interaction: discord.Interaction):
+    try:
+        guild_id = str(interaction.guild.id)
+        
+        # Check if there are any quarantined users
+        if guild_id not in quarantine_data or not quarantine_data[guild_id]:
+            await interaction.response.send_message("There are no users currently in quarantine.", ephemeral=True)
+            return
+            
+        # Create embed
+        embed = discord.Embed(
+            title="Quarantined Users",
+            description=f"There are {len(quarantine_data[guild_id])} users in quarantine.",
+            color=discord.Color.orange()
+        )
+        
+        # Add each user
+        for user_id, data in quarantine_data[guild_id].items():
+            try:
+                user = await interaction.guild.fetch_member(int(user_id))
+                user_mention = user.mention
+            except:
+                user_mention = f"User ID: {user_id} (left server)"
+                
+            mod_id = data.get("quarantined_by")
+            try:
+                mod = await interaction.guild.fetch_member(int(mod_id))
+                mod_mention = mod.mention
+            except:
+                mod_mention = f"Mod ID: {mod_id}"
+                
+            timestamp = data.get("timestamp", "Unknown")
+            reason = data.get("reason", "No reason provided")
+            
+            embed.add_field(
+                name=f"User: {user_mention}", 
+                value=f"**Quarantined by:** {mod_mention}\n**Reason:** {reason}\n**When:** {timestamp}", 
+                inline=False
+            )
+            
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+            
+    except Exception as e:
+        await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
+
+@bot.tree.command(name="challenge", description="Give a challenge to a quarantined user (they can reduce their sentence by completing it)")
+@app_commands.describe(
+    user="The quarantined user to challenge",
+    challenge="The challenge for them to complete",
+    reward_minutes="Minutes to reduce their sentence if they complete it"
+)
+async def challenge_user(interaction: discord.Interaction, user: discord.Member, challenge: str, reward_minutes: int = 5):
+    try:
+        # Get guild and user IDs
+        guild_id = str(interaction.guild.id)
+        user_id = str(user.id)
+        
+        # Check if user is quarantined
+        if guild_id not in quarantine_data or user_id not in quarantine_data[guild_id]:
+            await interaction.response.send_message(f"{user.mention} is not in quarantine!", ephemeral=True)
+            return
+            
+        # Get quarantine data
+        user_data = quarantine_data[guild_id][user_id]
+        
+        # Get the quarantine channel
+        quarantine_channel_id = user_data.get("channel_id")
+        if not quarantine_channel_id:
+            await interaction.response.send_message("Couldn't find the quarantine channel.", ephemeral=True)
+            return
+            
+        quarantine_channel = interaction.guild.get_channel(int(quarantine_channel_id))
+        if not quarantine_channel:
+            await interaction.response.send_message("Couldn't find the quarantine channel.", ephemeral=True)
+            return
+            
+        # Create a challenge embed
+        embed = discord.Embed(
+            title="🎭 QUARANTINE CHALLENGE",
+            description=f"{interaction.user.mention} has issued a challenge to {user.mention}!",
+            color=discord.Color.gold()
+        )
+        embed.add_field(name="Challenge", value=challenge, inline=False)
+        embed.add_field(name="Reward", value=f"Reduce sentence by {reward_minutes} minutes", inline=False)
+        embed.set_footer(text="A mod will decide if you've completed the challenge successfully.")
+        
+        # Add buttons for mods to approve/deny the challenge
+        challenge_msg = await quarantine_channel.send(embed=embed)
+        
+        # Store the challenge in user's quarantine data
+        if "challenges" not in user_data:
+            user_data["challenges"] = []
+            
+        user_data["challenges"].append({
+            "challenge": challenge,
+            "reward_minutes": reward_minutes,
+            "from_user": str(interaction.user.id),
+            "message_id": str(challenge_msg.id),
+            "completed": False
+        })
+        
+        save_quarantine_data(quarantine_data)
+        
+        # Also post in jail-cam if public
+        if user_data.get("public_view", False):
+            jail_cam_channel = discord.utils.get(interaction.guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
+            if jail_cam_channel:
+                await jail_cam_channel.send(embed=embed)
+                
+        # Confirm to challenge giver
+        await interaction.response.send_message(f"Challenge sent to {user.mention}! If they complete it, a mod can reduce their sentence.", ephemeral=False)
+        
+    except Exception as e:
+        await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
+
+@bot.tree.command(name="complete", description="Mark a quarantined user's challenge as complete and reduce their sentence")
+@app_commands.describe(
+    user="The quarantined user who completed a challenge",
+    challenge_index="Which challenge was completed (use /challenges to see indices)"
+)
+@app_commands.default_permissions(moderate_members=True)
+async def complete_challenge(interaction: discord.Interaction, user: discord.Member, challenge_index: int):
+    try:
+        # Get guild and user IDs
+        guild_id = str(interaction.guild.id)
+        user_id = str(user.id)
+        
+        # Check if user is quarantined
+        if guild_id not in quarantine_data or user_id not in quarantine_data[guild_id]:
+            await interaction.response.send_message(f"{user.mention} is not in quarantine!", ephemeral=True)
+            return
+            
+        # Get quarantine data
+        user_data = quarantine_data[guild_id][user_id]
+        
+        # Check if user has challenges
+        if "challenges" not in user_data or not user_data["challenges"] or challenge_index >= len(user_data["challenges"]):
+            await interaction.response.send_message(f"Invalid challenge index for {user.mention}.", ephemeral=True)
+            return
+            
+        # Get the challenge
+        challenge = user_data["challenges"][challenge_index]
+        if challenge.get("completed", False):
+            await interaction.response.send_message("This challenge has already been completed.", ephemeral=True)
+            return
+            
+        # Mark challenge as completed
+        challenge["completed"] = True
+        challenge["completed_by"] = str(interaction.user.id)
+        challenge["completed_at"] = str(datetime.datetime.now(UTC))
+        
+        # Reduce sentence if there's an end time
+        time_reduced = False
+        if "end_time" in user_data:
+            try:
+                # Parse the end time
+                end_time = datetime.datetime.fromisoformat(user_data["end_time"].replace('Z', '+00:00'))
+                
+                # Reduce by reward minutes
+                reward_minutes = challenge.get("reward_minutes", 5)
+                new_end_time = end_time - datetime.timedelta(minutes=reward_minutes)
+                
+                # Don't go below current time
+                current_time = datetime.datetime.now(UTC)
+                if new_end_time < current_time:
+                    new_end_time = current_time
+                    
+                # Update end time
+                user_data["end_time"] = str(new_end_time)
+                time_reduced = True
+            except Exception as e:
+                print(f"Error reducing sentence: {e}")
+                
+        # Save changes
+        save_quarantine_data(quarantine_data)
+        
+        # Get the quarantine channel
+        quarantine_channel_id = user_data.get("channel_id")
+        quarantine_channel = interaction.guild.get_channel(int(quarantine_channel_id)) if quarantine_channel_id else None
+        
+        # Notify about completion
+        if quarantine_channel:
+            if time_reduced:
+                await quarantine_channel.send(
+                    f"✅ **CHALLENGE COMPLETED**\n\n" +
+                    f"{user.mention} has completed the challenge: **{challenge['challenge']}**\n" +
+                    f"Their sentence has been reduced by {challenge.get('reward_minutes', 5)} minutes!\n" +
+                    f"New release time: {user_data['end_time'] if 'end_time' in user_data else 'N/A'}"
+                )
+            else:
+                await quarantine_channel.send(
+                    f"✅ **CHALLENGE COMPLETED**\n\n" +
+                    f"{user.mention} has completed the challenge: **{challenge['challenge']}**\n" +
+                    f"However, they don't have a timed sentence to reduce."
+                )
+                
+        # Also notify in jail-cam if public
+        if user_data.get("public_view", False):
+            jail_cam_channel = discord.utils.get(interaction.guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
+            if jail_cam_channel:
+                embed = discord.Embed(
+                    title="✅ CHALLENGE COMPLETED",
+                    description=f"{user.mention} has completed their challenge!",
+                    color=discord.Color.green()
+                )
+        # Confirm to mod
+        await interaction.followup.send(f"Challenge completed! Sentence reduced by {challenge.get('reward_minutes', 5)} minutes.", ephemeral=False)
+        
+    except Exception as e:
+        await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
+
+@bot.tree.command(name="challenges", description="View all challenges for a quarantined user")
+@app_commands.describe(
+    user="The quarantined user to view challenges for"
+)
+async def view_challenges(interaction: discord.Interaction, user: discord.Member):
+    try:
+        # Get guild and user IDs
+        guild_id = str(interaction.guild.id)
+        user_id = str(user.id)
+        
+        # Check if user is quarantined
+        if guild_id not in quarantine_data or user_id not in quarantine_data[guild_id]:
+            await interaction.response.send_message(f"{user.mention} is not in quarantine!", ephemeral=True)
+            return
+            
+        # Get quarantine data
+        user_data = quarantine_data[guild_id][user_id]
+        
+        # Check if user has challenges
+        if "challenges" not in user_data or not user_data["challenges"]:
+            await interaction.response.send_message(f"{user.mention} has no challenges.", ephemeral=True)
+            return
+            
+        # Create embed to display challenges
+        embed = discord.Embed(
+            title=f"Challenges for {user.display_name}",
+            description=f"{user.mention} has {len(user_data['challenges'])} challenges.",
+            color=discord.Color.blue()
+        )
+        
+        # Add each challenge
+        for i, challenge in enumerate(user_data["challenges"]):
+            status = "✅ Completed" if challenge.get("completed", False) else "⏳ Pending"
+            try:
+                from_user = await interaction.guild.fetch_member(int(challenge["from_user"]))
+                from_user_mention = from_user.mention
+            except:
+                from_user_mention = f"User ID: {challenge['from_user']}"
+                
+            embed.add_field(
+                name=f"Challenge #{i} - {status}",
+                value=f"**Task:** {challenge['challenge']}\n" +
+                      f"**Reward:** {challenge.get('reward_minutes', 5)} minutes off sentence\n" +
+                      f"**From:** {from_user_mention}",
+                inline=False
+            )
+            
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        
+    except Exception as e:
+        await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
+
+# Fun feature to throw items at quarantined users
+@bot.tree.command(name="throw", description="Throw something at a quarantined user")
+@app_commands.describe(
+    item="What to throw at the quarantined user",
+    user="The quarantined user to throw at (defaults to any quarantined user)"
+)
+@app_commands.choices(item=[
+    app_commands.Choice(name="Tomato 🍅", value="tomato"),
+    app_commands.Choice(name="Egg 🥚", value="egg"),
+    app_commands.Choice(name="Pie 🥧", value="pie"),
+    app_commands.Choice(name="Shoe 👟", value="shoe"),
+    app_commands.Choice(name="Flower 🌹", value="flower"),
+    app_commands.Choice(name="Money 💰", value="money"),
+    app_commands.Choice(name="Water Balloon 💧", value="water"),
+    app_commands.Choice(name="Snowball ❄️", value="snow")
+])
+async def throw_item(interaction: discord.Interaction, item: str, user: Optional[discord.Member] = None):
+    try:
+        # Get guild and data
+        guild_id = str(interaction.guild.id)
+        
+        # Check if there are quarantined users
+        if guild_id not in quarantine_data or not quarantine_data[guild_id]:
+            await interaction.response.send_message("There's nobody in quarantine to throw things at!", ephemeral=True)
+            return
+            
+        # If user specified, check if they're in quarantine
+        if user:
+            if str(user.id) not in quarantine_data[guild_id]:
+                await interaction.response.send_message(f"{user.mention} is not in quarantine!", ephemeral=True)
+                return
+            target_user = user
+            quarantine_channel_id = quarantine_data[guild_id][str(user.id)].get("channel_id")
+        else:
+            # Pick a random quarantined user
+            quarantined_user_id = random.choice(list(quarantine_data[guild_id].keys()))
+            try:
+                target_user = await interaction.guild.fetch_member(int(quarantined_user_id))
+                quarantine_channel_id = quarantine_data[guild_id][quarantined_user_id].get("channel_id")
+            except:
+                await interaction.response.send_message("Couldn't find a valid quarantined user.", ephemeral=True)
+                return
+            
+        # Get the quarantine channel
+        if not quarantine_channel_id:
+            await interaction.response.send_message("Couldn't find the quarantine channel.", ephemeral=True)
+            return
+            
+        quarantine_channel = interaction.guild.get_channel(int(quarantine_channel_id))
+        if not quarantine_channel:
+            await interaction.response.send_message("Couldn't find the quarantine channel.", ephemeral=True)
+            return
+            
+        # Get the item details
+        throw_messages = {
+            "tomato": [
+                f"SPLAT! {interaction.user.mention} threw a tomato 🍅 at {target_user.mention}!",
+                f"{interaction.user.mention} hurls a juicy tomato 🍅 that hits {target_user.mention} right in the face!",
+                f"A tomato 🍅 flies through the air and hits {target_user.mention}, courtesy of {interaction.user.mention}!"
+            ],
+            "egg": [
+                f"CRACK! {interaction.user.mention} hit {target_user.mention} with an egg 🥚!", 
+                f"{interaction.user.mention} throws an egg 🥚 that breaks over {target_user.mention}'s head!",
+                f"Look out {target_user.mention}! {interaction.user.mention} just egged you! 🥚"
+            ],
+            "pie": [
+                f"SPLAT! {interaction.user.mention} threw a pie 🥧 at {target_user.mention}!",
+                f"{interaction.user.mention} shoves a pie 🥧 right in {target_user.mention}'s face!",
+                f"A cream pie 🥧 from {interaction.user.mention} hits {target_user.mention} perfectly!"
+            ],
+            "shoe": [
+                f"BONK! {interaction.user.mention} threw a shoe 👟 at {target_user.mention}!",
+                f"{interaction.user.mention} takes off their shoe 👟 and throws it at {target_user.mention}!",
+                f"Duck, {target_user.mention}! A flying shoe 👟 from {interaction.user.mention} is coming your way!"
+            ],
+            "flower": [
+                f"{interaction.user.mention} tosses a flower 🌹 to {target_user.mention}. How sweet!",
+                f"A beautiful flower 🌹 from {interaction.user.mention} lands near {target_user.mention}.",
+                f"{interaction.user.mention} throws a flower 🌹 at {target_user.mention}. Maybe they're not so mad after all?"
+            ],
+            "money": [
+                f"{interaction.user.mention} throws money 💰 at {target_user.mention}! Make it rain!",
+                f"{interaction.user.mention} showers {target_user.mention} with cash 💰! Cha-ching!",
+                f"Look! {interaction.user.mention} is throwing money 💰 at {target_user.mention}! How generous!"
+            ],
+            "water": [
+                f"SPLASH! {interaction.user.mention} hit {target_user.mention} with a water balloon 💧!",
+                f"{interaction.user.mention} throws a water balloon 💧 that explodes all over {target_user.mention}!",
+                f"{target_user.mention} is now soaking wet thanks to {interaction.user.mention}'s water balloon 💧!"
+            ],
+            "snow": [
+                f"POOF! {interaction.user.mention} hit {target_user.mention} with a snowball ❄️!",
+                f"{interaction.user.mention} throws a snowball ❄️ right at {target_user.mention}!",
+                f"A snowball ❄️ from {interaction.user.mention} hits {target_user.mention} with a soft thud!"
+            ]
+        }
+        
+        # Get messages for selected item or use default
+        messages = throw_messages.get(item, [f"{interaction.user.mention} threw something at {target_user.mention}!"])
+        
+        # Pick a random message
+        message = random.choice(messages)
+        
+        # Send message to quarantine channel
+        await quarantine_channel.send(message)
+        
+        # Confirm to thrower
+        if item == "tomato":
+            emoji = "🍅"
+        elif item == "egg":
+            emoji = "🥚"
+        elif item == "pie":
+            emoji = "🥧"
+        elif item == "shoe":
+            emoji = "👟"
+        elif item == "flower":
+            emoji = "🌹"
+        elif item == "money":
+            emoji = "💰"
+        elif item == "water":
+            emoji = "💧"
+        elif item == "snow":
+            emoji = "❄️"
+        else:
+            emoji = "🎯"
+            
+        await interaction.response.send_message(f"You threw a {item} {emoji} at {target_user.mention}!", ephemeral=True)
+        
+    except Exception as e:
+        await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
+
+# Check for expired quarantines every minute
+@tasks.loop(minutes=1)
+async def check_quarantine_expirations():
+    try:
+        current_time = datetime.datetime.now(UTC)
+        guilds_to_check = list(quarantine_data.keys())
+        
+        for guild_id in guilds_to_check:
+            guild = bot.get_guild(int(guild_id))
+            if not guild:
+                continue
+                
+            users_to_unquarantine = []
+            
+            # Find users whose quarantine has expired
+            for user_id, data in quarantine_data[guild_id].items():
+                if "end_time" in data:
+                    try:
+                        end_time = datetime.datetime.fromisoformat(data["end_time"].replace('Z', '+00:00'))
+                        if current_time >= end_time:
+                            users_to_unquarantine.append(user_id)
+                    except Exception as e:
+                        print(f"Error parsing end time: {e}")
+            
+            # Unquarantine expired users
+            for user_id in users_to_unquarantine:
+                try:
+                    # Get the user and their data
+                    member = await guild.fetch_member(int(user_id))
+                    user_data = quarantine_data[guild_id][user_id]
+                    saved_roles = user_data.get("roles", [])
+                    
+                    # Reset channel permissions
+                    for channel in guild.channels:
+                        try:
+                            await channel.set_permissions(member, overwrite=None, reason="Auto-released from timed quarantine")
+                        except:
+                            pass
+                    
+                    # Restore roles
+                    for role_id in saved_roles:
+                        role = guild.get_role(int(role_id))
+                        if role:
+                            try:
+                                await member.add_roles(role, reason="Auto-released from timed quarantine")
+                            except:
+                                pass
+                    
+                    # Remove from quarantine data
+                    del quarantine_data[guild_id][user_id]
+                    save_quarantine_data(quarantine_data)
+                    
+                    # DM the user
+                    try:
+                        await member.send(f"You have been automatically released from quarantine in **{guild.name}**. Your access has been restored.")
+                    except:
+                        pass
+                    
+                    # Log to mod-logs
+                    log_channel = discord.utils.get(guild.text_channels, name="mod-logs")
+                    if log_channel:
+                        embed = discord.Embed(
+                            title="🔓 User Auto-Released from Quarantine",
+                            description=f"<@{user_id}> has been automatically released from quarantine (timer expired).",
+                            color=discord.Color.green(),
+                            timestamp=current_time
+                        )
+                        embed.add_field(name="User", value=f"<@{user_id}> ({user_id})", inline=True)
+                        embed.set_footer(text="Automatic timed release")
+                        await log_channel.send(embed=embed)
+                        
+                except Exception as e:
+                    print(f"Error auto-unquarantining user {user_id}: {e}")
+    except Exception as e:
+        print(f"Error in quarantine expiration task: {e}")
+
+@check_quarantine_expirations.before_loop
+async def before_quarantine_check():
+    await bot.wait_until_ready()
+
 # Run the bot
 if __name__ == "__main__":
     # Check if token is available
     if not TOKEN:
         print("Error: No Discord token found in .env file")
         exit(1)
+    
+    # Start the quarantine check task
+    check_quarantine_expirations.start()
     
     # Attach attributes to bot
     bot.antiraid_mode = False
