@@ -4,6 +4,7 @@ import discord
 import datetime
 import asyncio
 import re
+import sys
 from typing import Optional, List, Union
 from discord import app_commands
 from discord.ext import commands, tasks
@@ -278,11 +279,29 @@ async def on_ready():
     # Create backup on startup
     await create_backup()
     
-    # Sync commands to guilds
-    print("Syncing commands...")
+    # DIAGNOSTIC: Print all commands registered in the command tree
+    print("\nDIAGNOSTIC - Commands registered in tree:")
+    for cmd in bot.tree.get_commands():
+        print(f"Global command: {cmd.name} - {cmd.description}")
+    
+    # Force sync commands to guilds
+    print("\nSyncing commands to guilds...")
     for guild in bot.guilds:
         try:
+            # First try to clear the command cache
+            print(f"Syncing to {guild.name} (ID: {guild.id})")
+            # Force clear commands first
+            bot.tree.clear_commands(guild=guild)
             await bot.tree.sync(guild=guild)
+            
+            # Then add them back
+            commands = await bot.tree.sync(guild=guild)
+            print(f"Successfully synced {len(commands)} commands to {guild.name}")
+            print(f"Commands in {guild.name}: {[cmd.name for cmd in commands]}")
+            
+            # Check if quarantine commands are in the list
+            quarantine_cmds = [cmd for cmd in commands if cmd.name in ['quarantine', 'unquarantine', 'quarantinelist']]
+            print(f"Quarantine commands found: {[cmd.name for cmd in quarantine_cmds]}")
         except Exception as e:
             print(f"Failed to sync commands to {guild.name}: {e}")
     print("Command sync complete!")
@@ -3588,6 +3607,7 @@ async def quarantine_user(interaction: discord.Interaction, user: discord.Member
         }
         
         # Add expiry time if minutes is specified
+        end_time = None
         if minutes > 0:
             end_time = current_time + datetime.timedelta(minutes=minutes)
             quarantine_data[guild_id][user_id]["end_time"] = str(end_time)
@@ -3618,6 +3638,120 @@ async def quarantine_user(interaction: discord.Interaction, user: discord.Member
             for role in user.roles:
                 if not role.is_default():
                     await user.remove_roles(role, reason=f"Quarantine: {reason}")
+        except Exception as e:
+            await interaction.followup.send(f"Warning: Could not remove all roles: {str(e)}", ephemeral=True)
+            
+        # Send notification to the quarantine channel
+        try:
+            embed = discord.Embed(
+                title="🔒 NEW INMATE ARRIVED",
+                description=f"{user.mention} has been quarantined!",
+                color=discord.Color.red()
+            )
+            embed.add_field(name="Reason", value=reason, inline=True)
+            embed.add_field(name="Quarantined by", value=interaction.user.mention, inline=True)
+            
+            if minutes > 0:
+                embed.add_field(name="Duration", value=f"{minutes} minutes", inline=True)
+                embed.set_footer(text=f"Will be auto-released at {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            else:
+                embed.set_footer(text="Indefinite quarantine - manual release required")
+                
+            embed.set_thumbnail(url=user.display_avatar.url)
+            await quarantine_channel.send(embed=embed)
+            
+            # Also send to jail-cam if public viewing is enabled
+            if public:
+                jail_cam_channel = discord.utils.get(interaction.guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
+                if jail_cam_channel:
+                    await jail_cam_channel.send(embed=embed)
+        except Exception as e:
+            await interaction.followup.send(f"Warning: Could not send notification: {str(e)}", ephemeral=True)
+            
+        # Log to mod-logs
+        try:
+            log_channel = discord.utils.get(interaction.guild.text_channels, name="mod-logs")
+            if log_channel:
+                log_embed = discord.Embed(
+                    title="🔒 User Quarantined",
+                    description=f"{user.mention} has been placed in quarantine.",
+                    color=discord.Color.orange(),
+                    timestamp=current_time
+                )
+                log_embed.add_field(name="User", value=f"{user} ({user.id})", inline=True)
+                log_embed.add_field(name="Moderator", value=f"{interaction.user} ({interaction.user.id})", inline=True)
+                log_embed.add_field(name="Reason", value=reason, inline=True)
+                if minutes > 0:
+                    log_embed.add_field(name="Duration", value=f"{minutes} minutes", inline=True)
+                log_embed.set_thumbnail(url=user.display_avatar.url)
+                await log_channel.send(embed=log_embed)
+        except Exception as e:
+            print(f"Error logging quarantine: {e}")
+            
+        # Send final confirmation
+        await interaction.followup.send(f"✅ {user.mention} has been quarantined successfully.", ephemeral=False)
+            
+        # DM the user
+        try:
+            dm_embed = discord.Embed(
+                title="You have been quarantined",
+                description=f"You have been placed in quarantine in **{interaction.guild.name}**.",
+                color=discord.Color.red()
+            )
+            dm_embed.add_field(name="Reason", value=reason, inline=False)
+            if minutes > 0:
+                dm_embed.add_field(name="Duration", value=f"{minutes} minutes", inline=False)
+                dm_embed.set_footer(text=f"You will be automatically released at {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            else:
+                dm_embed.set_footer(text="You will remain in quarantine until a moderator releases you.")
+            await user.send(embed=dm_embed)
+        except:
+            # User might have DMs disabled
+                description=f"{user.mention} has been quarantined!",
+                color=discord.Color.red()
+            )
+            embed.add_field(name="Reason", value=reason, inline=True)
+            embed.add_field(name="Quarantined by", value=interaction.user.mention, inline=True)
+            
+            if minutes > 0:
+                embed.add_field(name="Duration", value=f"{minutes} minutes", inline=True)
+                embed.set_footer(text=f"Will be auto-released at {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            else:
+                embed.set_footer(text="Indefinite quarantine - manual release required")
+                
+            embed.set_thumbnail(url=user.display_avatar.url)
+            await quarantine_channel.send(embed=embed)
+            
+            # Also send to jail-cam if public viewing is enabled
+            if public:
+                jail_cam_channel = discord.utils.get(interaction.guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
+                if jail_cam_channel:
+                    await jail_cam_channel.send(embed=embed)
+        except Exception as e:
+            await interaction.followup.send(f"Warning: Could not send notification: {str(e)}", ephemeral=True)
+            
+        # Log to mod-logs
+        try:
+            log_channel = discord.utils.get(interaction.guild.text_channels, name="mod-logs")
+            if log_channel:
+                log_embed = discord.Embed(
+                    title="🔒 User Quarantined",
+                    description=f"{user.mention} has been placed in quarantine.",
+                    color=discord.Color.orange(),
+                    timestamp=current_time
+                )
+                log_embed.add_field(name="User", value=f"{user} ({user.id})", inline=True)
+                log_embed.add_field(name="Moderator", value=f"{interaction.user} ({interaction.user.id})", inline=True)
+                log_embed.add_field(name="Reason", value=reason, inline=True)
+                if minutes > 0:
+                    log_embed.add_field(name="Duration", value=f"{minutes} minutes", inline=True)
+                log_embed.set_thumbnail(url=user.display_avatar.url)
+                await log_channel.send(embed=log_embed)
+        except Exception as e:
+            print(f"Error logging quarantine: {e}")
+            
+        # Send final confirmation
+        await interaction.followup.send(f"✅ {user.mention} has been quarantined successfully.", ephemeral=False)ason}")
         except Exception as e:
             await interaction.followup.send(f"Warning: Could not remove all roles: {str(e)}", ephemeral=True)
         
@@ -4261,22 +4395,81 @@ async def check_quarantine_expirations():
 async def before_quarantine_check():
     await bot.wait_until_ready()
 
-# Force sync commands with a regular command
-@bot.command(name="sync")
-@commands.has_permissions(administrator=True)
-async def sync_commands(ctx):
+# Debug command to force sync all commands
+@bot.command(name="forcesync")
+@commands.is_owner()
+async def forcesync(ctx):
+    """Force syncs all commands to the current guild"""
     try:
-        print("Force syncing commands...")
-        await ctx.send("Syncing slash commands to this server, please wait...")
+        # Clear the command tree for this guild
+        bot.tree.clear_commands(guild=ctx.guild)
+        await bot.tree.sync(guild=ctx.guild)
         
-        # Sync to the current guild
-        synced = await bot.tree.sync(guild=ctx.guild)
+        # Re-add all commands
+        await bot.tree.sync(guild=ctx.guild)
         
-        await ctx.send(f"✅ Successfully synced {len(synced)} commands to this server!")
-        print(f"Synced {len(synced)} commands to {ctx.guild.name}")
+        commands = await bot.tree.fetch_commands(guild=ctx.guild)
+        await ctx.send(f"✅ Force synced {len(commands)} commands to this guild!")
+        await ctx.send(f"Commands: {', '.join([cmd.name for cmd in commands])}")
     except Exception as e:
-        await ctx.send(f"❌ Error syncing commands: {e}")
-        print(f"Error syncing commands: {e}")
+        await ctx.send(f"❌ Error: {str(e)}")
+
+# Fresh account settings command
+@bot.tree.command(name="freshaccounts", description="Configure fresh account detection settings")
+@app_commands.describe(
+    action="Action to take on fresh accounts",
+    age_threshold="Minimum account age in days",
+    enabled="Enable or disable fresh account detection"
+)
+@app_commands.choices(action=[
+    app_commands.Choice(name="Alert Only", value="alert"),
+    app_commands.Choice(name="Auto-Quarantine", value="quarantine"),
+    app_commands.Choice(name="Auto-Kick", value="kick")
+])
+@app_commands.choices(enabled=[
+    app_commands.Choice(name="Enable", value=1),
+    app_commands.Choice(name="Disable", value=0)
+])
+@app_commands.default_permissions(administrator=True)
+async def fresh_account_settings(interaction: discord.Interaction, action: str, age_threshold: int = 7, enabled: int = 1):
+    try:
+        guild_id = str(interaction.guild.id)
+        
+        # Initialize settings if needed
+        if guild_id not in fresh_account_settings:
+            fresh_account_settings[guild_id] = {}
+            
+        # Update settings
+        fresh_account_settings[guild_id]["action"] = action
+        fresh_account_settings[guild_id]["age_threshold"] = age_threshold
+        fresh_account_settings[guild_id]["enabled"] = bool(enabled)
+        
+        # Save settings
+        save_fresh_account_settings(fresh_account_settings)
+        
+        # Create response embed
+        embed = discord.Embed(
+            title="Fresh Account Detection Settings",
+            description="Settings have been updated successfully.",
+            color=discord.Color.green() if enabled else discord.Color.red()
+        )
+        
+        embed.add_field(name="Status", value="Enabled" if enabled else "Disabled", inline=True)
+        embed.add_field(name="Account Age Threshold", value=f"{age_threshold} days", inline=True)
+        embed.add_field(name="Action", value=action.title(), inline=True)
+        
+        # Explain what the settings do
+        if action == "alert":
+            embed.add_field(name="What this does", value="New accounts younger than the threshold will trigger an alert in the mod-logs channel.", inline=False)
+        elif action == "quarantine":
+            embed.add_field(name="What this does", value="New accounts younger than the threshold will be automatically quarantined.", inline=False)
+        elif action == "kick":
+            embed.add_field(name="What this does", value="New accounts younger than the threshold will be automatically kicked.", inline=False)
+        
+        await interaction.response.send_message(embed=embed)
+        
+    except Exception as e:
+        await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
 
 # Run the bot
 if __name__ == "__main__":
@@ -4284,6 +4477,15 @@ if __name__ == "__main__":
     if not TOKEN:
         print("Error: No Discord token found in .env file")
         exit(1)
+    
+    # Print diagnostic info
+    print("\n=== ORION BOT DIAGNOSTIC INFO ===")
+    print(f"Discord.py version: {discord.__version__}")
+    print(f"Python version: {sys.version}")
+    print(f"Command prefix: {PREFIX}")
+    print(f"Quarantine commands registered: quarantine, unquarantine, quarantinelist")
+    print(f"Fresh account detection: {FRESH_ACCOUNT_FILE} exists: {os.path.exists(FRESH_ACCOUNT_FILE)}")
+    print("==================================\n")
     
     # Attach attributes to bot
     bot.antiraid_mode = False
