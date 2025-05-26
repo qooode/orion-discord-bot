@@ -260,29 +260,33 @@ bot = commands.Bot(command_prefix=PREFIX, intents=intents)
 @bot.event
 async def on_ready():
     print(f'{bot.user.name} has connected to Discord!')
-    try:
-        synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} command(s)")
-    except Exception as e:
-        print(f"Failed to sync commands: {e}")
+    print(f'Bot ID: {bot.user.id}')
+    print(f'Bot is in {len(bot.guilds)} guild(s)')
     
-    # Set custom status
-    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="for rule breakers"))
+    # Set initial presence
+    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="for spammers | !help"))
     
-    # Check for temp voice channels that need to be tracked
+    # Setup recurring scheduled tasks
+    if not scheduled_backup.is_running():
+        scheduled_backup.start()
+    
+    if not check_scheduled_tasks.is_running():
+        check_scheduled_tasks.start()
+        
+    if not check_quarantine_expirations.is_running():
+        check_quarantine_expirations.start()
+    
+    # Create backup on startup
+    await create_backup()
+    
+    # Sync commands to guilds
+    print("Syncing commands...")
     for guild in bot.guilds:
-        guild_id = str(guild.id)
-        if guild_id in temp_voice_data and "create_channel" in temp_voice_data[guild_id]:
-            create_channel_id = temp_voice_data[guild_id]["create_channel"]
-            create_channel = guild.get_channel(int(create_channel_id))
-            if create_channel:
-                print(f"Found temp voice creator channel in {guild.name}")
-    
-    # Start backup task
-    bot.loop.create_task(scheduled_backup())
-    
-    # Start scheduled tasks handler
-    bot.loop.create_task(check_scheduled_tasks())
+        try:
+            await bot.tree.sync(guild=guild)
+        except Exception as e:
+            print(f"Failed to sync commands to {guild.name}: {e}")
+    print("Command sync complete!")
 
 # Scheduled backup task
 async def scheduled_backup():
@@ -4255,9 +4259,6 @@ if __name__ == "__main__":
     if not TOKEN:
         print("Error: No Discord token found in .env file")
         exit(1)
-    
-    # Start the quarantine check task
-    check_quarantine_expirations.start()
     
     # Attach attributes to bot
     bot.antiraid_mode = False
