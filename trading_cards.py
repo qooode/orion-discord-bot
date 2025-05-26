@@ -78,31 +78,69 @@ class TradingCards(commands.Cog):
     async def card_group(self, ctx):
         """Trading card commands"""
         embed = discord.Embed(
-            title="🃏 Trading Card System",
-            description="Available commands:",
+            title="🃏 Trading Card System - Complete Guide",
+            description="Your server's complete trading card collection system!",
             color=0x7289da
         )
+        
+        # Basic Collection Commands
         embed.add_field(
-            name="🎯 Collection",
-            value="`!card collection` - View your cards\n`!card daily` - Daily card claim\n`!card info <name>` - Card details",
+            name="🎯 Collection & Claims",
+            value="`!card daily` - Claim your daily free card (24h cooldown)\n`!card collection [@user]` - View card collection\n`!card info <card name>` - Get detailed card information\n`!card search <text>` - Search for cards by name",
             inline=False
         )
+        
+        # Trading & Social Commands  
         embed.add_field(
-            name="🔄 Trading",
-            value="`!card trade @user <your_card> <their_card>` - Propose trade\n`!card gift @user <card>` - Gift a card",
+            name="🔄 Trading & Gifts",
+            value="`!card trade @user <your card> <their card>` - Propose a trade\n`!card gift @user <card name>` - Gift a card to someone\n`!card leaderboard` - View top collectors",
             inline=False
         )
+        
+        # Statistics & Information
         embed.add_field(
-            name="📊 Stats",
-            value="`!card stats` - Your collection stats\n`!card leaderboard` - Top collectors\n`!card search <name>` - Find cards",
+            name="📊 Statistics & Info",
+            value="`!card stats [@user]` - View collection statistics\n`!card rarity` - Learn about the rarity system\n`!card leaderboard` - Top card collectors",
             inline=False
         )
+        
+        # Rarity Quick Reference
+        embed.add_field(
+            name="🌟 Rarity System Quick Reference",
+            value="⚪ **Common** (70%) - Server memes, inside jokes\n🟢 **Uncommon** (20%) - Special moments\n🔵 **Rare** (8%) - Significant events\n🟡 **Legendary** (2%) - Epic milestones",
+            inline=False
+        )
+        
+        # How to Get Cards
+        embed.add_field(
+            name="💡 How to Get Cards",
+            value="• **Daily Claims**: `!card daily` every 24 hours\n• **Random Drops**: React 🃏 to wild cards in chat\n• **Trading**: Exchange with other users\n• **Gifts**: Receive from generous users",
+            inline=False
+        )
+        
+        # Admin Commands (only show if user is admin)
         if ctx.author.guild_permissions.administrator:
             embed.add_field(
-                name="⚙️ Admin",
-                value="`!card create` - Create new card\n`!card list` - All cards\n`!card give @user <card>` - Give card",
+                name="⚙️ Admin - Card Management",
+                value="`!card create` - Create new card (interactive)\n`!card list` - View all created cards\n`!card give @user <card>` - Give card to user\n`!card delete <card>` - Delete card permanently",
                 inline=False
             )
+            
+            embed.add_field(
+                name="🛠️ Admin - System Configuration",
+                value="`!card config` - View system settings & stats\n`!card stats` - Detailed system statistics\n`!card dropchannel #channel` - Set random drop channel\n`!card drop [#channel] [card]` - Manual card drop",
+                inline=False
+            )
+            
+            embed.add_field(
+                name="📈 Admin - Drop System",
+                value="• **Random Drops**: Every 30 minutes, 5% chance\n• **Manual Drops**: `!card drop` for events\n• **Requirements**: 3+ messages in last hour\n• **Timeout**: 5-10 minutes to claim",
+                inline=False
+            )
+        
+        # Footer with tips
+        embed.set_footer(text="💡 Tip: Use !card rarity to learn about drop rates and trading strategies!")
+        
         await ctx.send(embed=embed)
 
     @card_group.command(name='create')
@@ -235,26 +273,7 @@ class TradingCards(commands.Cog):
         self.conn.commit()
         
         # Send card
-        embed = discord.Embed(
-            title="🎁 Daily Card Claimed!",
-            description=f"You got: **{card[1]}**",
-            color=self.get_rarity_color(card[3])
-        )
-        embed.add_field(name="Rarity", value=f"{self.get_rarity_emoji(card[3])} {card[3]}", inline=True)
-        if card[2]:
-            embed.add_field(name="Description", value=card[2], inline=False)
-        
-        if card[4]:  # image_url
-            if card[4].startswith('http'):
-                embed.set_image(url=card[4])
-            else:
-                try:
-                    file = discord.File(card[4])
-                    await ctx.send(embed=embed, file=file)
-                    return
-                except:
-                    pass
-        
+        embed = self.create_card_embed(card, "daily")
         await ctx.send(embed=embed)
 
     @card_group.command(name='collection')
@@ -425,26 +444,10 @@ class TradingCards(commands.Cog):
         self.cursor.execute("SELECT COUNT(DISTINCT user_id) FROM user_cards WHERE card_id = ?", (card[0],))
         unique_owners = self.cursor.fetchone()[0]
         
-        embed = discord.Embed(
-            title=f"🃏 {card[1]}",
-            description=card[2] or "No description",
-            color=self.get_rarity_color(card[3])
-        )
-        embed.add_field(name="Rarity", value=f"{self.get_rarity_emoji(card[3])} {card[3]}", inline=True)
+        embed = self.create_card_embed(card, "info")
         embed.add_field(name="Total Owned", value=str(total_owned), inline=True)
         embed.add_field(name="Unique Owners", value=str(unique_owners), inline=True)
         embed.add_field(name="Created", value=card[6][:10], inline=True)
-        
-        if card[4]:  # image_url
-            if card[4].startswith('http'):
-                embed.set_image(url=card[4])
-            else:
-                try:
-                    file = discord.File(card[4])
-                    await ctx.send(embed=embed, file=file)
-                    return
-                except:
-                    pass
         
         await ctx.send(embed=embed)
 
@@ -607,6 +610,93 @@ class TradingCards(commands.Cog):
         )
         await ctx.send(embed=embed)
 
+    @card_group.command(name='delete')
+    @commands.has_permissions(administrator=True)
+    async def delete_card(self, ctx, *, card_name: str):
+        """Delete a card permanently (Admin only)"""
+        # Find the card
+        self.cursor.execute("SELECT id, name, rarity FROM cards WHERE name LIKE ?", (f"%{card_name}%",))
+        card = self.cursor.fetchone()
+        
+        if not card:
+            await ctx.send(f"❌ No card found matching '{card_name}'!")
+            return
+        
+        card_id, exact_name, rarity = card
+        
+        # Get stats before deletion
+        self.cursor.execute("SELECT COUNT(*) FROM user_cards WHERE card_id = ?", (card_id,))
+        total_owned = self.cursor.fetchone()[0]
+        
+        self.cursor.execute("SELECT COUNT(DISTINCT user_id) FROM user_cards WHERE card_id = ?", (card_id,))
+        unique_owners = self.cursor.fetchone()[0]
+        
+        # Confirmation embed
+        confirm_embed = discord.Embed(
+            title="⚠️ Confirm Card Deletion",
+            description=f"Are you sure you want to **permanently delete** this card?",
+            color=0xff6b35
+        )
+        confirm_embed.add_field(name="Card", value=f"**{exact_name}**", inline=True)
+        confirm_embed.add_field(name="Rarity", value=f"{self.get_rarity_emoji(rarity)} {rarity}", inline=True)
+        confirm_embed.add_field(name="Impact", value=f"Will remove {total_owned} copies from {unique_owners} users", inline=False)
+        confirm_embed.add_field(name="⚠️ Warning", value="This action cannot be undone!", inline=False)
+        confirm_embed.set_footer(text="React with ✅ to confirm or ❌ to cancel (30 seconds)")
+        
+        message = await ctx.send(embed=confirm_embed)
+        await message.add_reaction('✅')
+        await message.add_reaction('❌')
+        
+        def check(reaction, user):
+            return user == ctx.author and str(reaction.emoji) in ['✅', '❌'] and reaction.message.id == message.id
+        
+        try:
+            reaction, _ = await self.bot.wait_for('reaction_add', timeout=30.0, check=check)
+            
+            if str(reaction.emoji) == '✅':
+                # Delete all user instances first
+                self.cursor.execute("DELETE FROM user_cards WHERE card_id = ?", (card_id,))
+                
+                # Delete from trades history
+                self.cursor.execute("DELETE FROM trades WHERE card_id = ?", (card_id,))
+                
+                # Delete the card itself
+                self.cursor.execute("DELETE FROM cards WHERE id = ?", (card_id,))
+                
+                self.conn.commit()
+                
+                # Success message
+                success_embed = discord.Embed(
+                    title="🗑️ Card Deleted Successfully",
+                    description=f"**{exact_name}** has been permanently removed from the system.",
+                    color=0xff0000
+                )
+                success_embed.add_field(name="Removed", value=f"{total_owned} copies from {unique_owners} users", inline=True)
+                success_embed.add_field(name="Deleted by", value=ctx.author.mention, inline=True)
+                success_embed.set_footer(text="This action cannot be undone")
+                
+                await message.edit(embed=success_embed)
+                
+                print(f"Card '{exact_name}' deleted by {ctx.author.name} - removed {total_owned} copies from {unique_owners} users")
+                
+            else:
+                # Cancelled
+                cancel_embed = discord.Embed(
+                    title="❌ Deletion Cancelled",
+                    description=f"**{exact_name}** was not deleted.",
+                    color=0x808080
+                )
+                await message.edit(embed=cancel_embed)
+                
+        except asyncio.TimeoutError:
+            # Timeout
+            timeout_embed = discord.Embed(
+                title="⏰ Deletion Timed Out",
+                description=f"Card deletion was cancelled due to timeout.",
+                color=0x808080
+            )
+            await message.edit(embed=timeout_embed)
+
     @tasks.loop(minutes=30)
     async def random_drops(self):
         """Random card drops in channels"""
@@ -631,13 +721,7 @@ class TradingCards(commands.Cog):
             if random.random() < 0.05:
                 card = self.get_random_card()
                 if card:
-                    embed = discord.Embed(
-                        title="🎁 Wild Card Appeared!",
-                        description=f"A **{card[1]}** card appeared! First to react with 🃏 gets it!",
-                        color=self.get_rarity_color(card[3])
-                    )
-                    embed.add_field(name="Rarity", value=f"{self.get_rarity_emoji(card[3])} {card[3]}", inline=True)
-                    
+                    embed = self.create_card_embed(card, "drop")
                     message = await channel.send(embed=embed)
                     await message.add_reaction('🃏')
                     
@@ -651,19 +735,11 @@ class TradingCards(commands.Cog):
                         self.cursor.execute("INSERT INTO user_cards (user_id, card_id) VALUES (?, ?)", (user.id, card[0]))
                         self.conn.commit()
                         
-                        success_embed = discord.Embed(
-                            title="✅ Card Caught!",
-                            description=f"{user.mention} caught the **{card[1]}** card!",
-                            color=0x00ff00
-                        )
+                        success_embed = self.create_card_embed(card, "claimed", {"user": user})
                         await channel.send(embed=success_embed)
                         
                     except asyncio.TimeoutError:
-                        timeout_embed = discord.Embed(
-                            title="💨 Card Escaped",
-                            description="The card disappeared...",
-                            color=0x808080
-                        )
+                        timeout_embed = self.create_card_embed(card, "claimed", {"status": "escaped"})
                         await message.edit(embed=timeout_embed)
 
     def set_drop_channel(self, guild_id: int, channel_id: int):
@@ -751,6 +827,424 @@ class TradingCards(commands.Cog):
             'Legendary': '🟡'
         }
         return emojis.get(rarity, '⚪')
+
+    def create_card_embed(self, card, context_type="display", extra_info=None):
+        """Create a beautiful card display embed"""
+        card_id, name, description, rarity, image_url, created_by, created_at = card
+        
+        # Different titles based on context
+        title_prefixes = {
+            "daily": "🎁 Daily Card Claimed!",
+            "drop": "🎁 Wild Card Appeared!",
+            "admin_drop": "🎯 Admin Card Drop!",
+            "claimed": "✅ Card Caught!",
+            "escaped": "💨 Card Escaped!",
+            "info": "🃏 Card Information",
+            "display": "🃏 Trading Card"
+        }
+        
+        # Handle special escaped context
+        if extra_info and extra_info.get("status") == "escaped":
+            context_type = "escaped"
+        
+        title = title_prefixes.get(context_type, "🃏 Trading Card")
+        
+        # Create the embed with rarity-based styling
+        embed_color = self.get_rarity_color(rarity)
+        if context_type == "escaped":
+            embed_color = 0x808080  # Gray for escaped cards
+            
+        embed = discord.Embed(
+            title=title,
+            color=embed_color
+        )
+        
+        # Card name as main description with rarity styling
+        rarity_stars = {
+            'Common': "⭐",
+            'Uncommon': "⭐⭐", 
+            'Rare': "⭐⭐⭐",
+            'Legendary': "⭐⭐⭐⭐"
+        }
+        
+        # Special handling for different contexts
+        if context_type == "escaped":
+            card_display = f"**{name}** vanished into the void...\n{rarity_stars.get(rarity, '⭐')} {self.get_rarity_emoji(rarity)} {rarity}"
+            if description:
+                card_display += f"\n\n*{description}*"
+            card_display += "\n\n💨 *No one claimed it in time!*"
+        elif context_type == "claimed" and extra_info and "user" in extra_info:
+            user = extra_info["user"]
+            card_display = f"**{name}**\n{rarity_stars.get(rarity, '⭐')} {self.get_rarity_emoji(rarity)} {rarity}"
+            if description:
+                card_display += f"\n\n*{description}*"
+            card_display += f"\n\n🎉 **Caught by {user.mention}!**"
+        elif context_type == "drop":
+            card_display = f"**{name}** appeared!\n{rarity_stars.get(rarity, '⭐')} {self.get_rarity_emoji(rarity)} {rarity}"
+            if description:
+                card_display += f"\n\n*{description}*"
+            card_display += "\n\n⚡ **First to react with 🃏 gets it!**"
+        elif context_type == "admin_drop":
+            card_display = f"**{name}** was dropped by an admin!\n{rarity_stars.get(rarity, '⭐')} {self.get_rarity_emoji(rarity)} {rarity}"
+            if description:
+                card_display += f"\n\n*{description}*"
+            card_display += "\n\n⚡ **First to react with 🃏 gets it!**"
+        else:
+            card_display = f"**{name}**\n{rarity_stars.get(rarity, '⭐')} {self.get_rarity_emoji(rarity)} {rarity}"
+            if description:
+                card_display += f"\n\n*{description}*"
+                
+        embed.description = card_display
+        
+        # Add beautiful fields based on context
+        if context_type == "daily":
+            embed.add_field(name="🎯 Obtained", value="Daily Claim", inline=True)
+            embed.add_field(name="⏰ Next Claim", value="<t:" + str(int((datetime.now() + timedelta(days=1)).timestamp())) + ":R>", inline=True)
+        elif context_type in ["drop", "admin_drop"]:
+            embed.add_field(name="🎲 Claim Method", value="React with 🃏", inline=True)
+            if context_type == "admin_drop" and extra_info and "dropped_by" in extra_info:
+                embed.add_field(name="👑 Dropped by", value=extra_info["dropped_by"], inline=True)
+        elif context_type == "claimed":
+            embed.add_field(name="🎊 Status", value="Successfully Caught!", inline=True)
+            if extra_info and "time_taken" in extra_info:
+                embed.add_field(name="⚡ Speed", value=f"{extra_info['time_taken']} seconds", inline=True)
+        elif context_type == "escaped":
+            embed.add_field(name="💸 Status", value="Escaped Unclaimed", inline=True)
+            embed.add_field(name="⏱️ Duration", value="Timeout reached", inline=True)
+        
+        # Rarity information field (always show except for escaped)
+        if context_type != "escaped":
+            rarity_info = {
+                'Common': "70% drop rate",
+                'Uncommon': "20% drop rate",
+                'Rare': "8% drop rate", 
+                'Legendary': "2% drop rate"
+            }
+            embed.add_field(name="📊 Rarity", value=rarity_info.get(rarity, "Unknown"), inline=True)
+        
+        # Add extra context-specific info
+        if extra_info:
+            for field_name, field_value in extra_info.items():
+                if field_name not in ["status", "user", "dropped_by", "time_taken"]:  # Skip already handled fields
+                    embed.add_field(name=field_name, value=field_value, inline=True)
+        
+        # Handle images beautifully
+        if image_url:
+            if image_url.startswith('http'):
+                embed.set_image(url=image_url)
+            else:
+                # For local files, we'll handle this in the calling function
+                pass
+        
+        # Beautiful footer with card ID and creation info
+        if created_at:
+            try:
+                # Parse the timestamp
+                created_date = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                embed.set_footer(text=f"Card ID: {card_id} • Created {created_date.strftime('%B %d, %Y')}")
+            except:
+                embed.set_footer(text=f"Card ID: {card_id}")
+        else:
+            embed.set_footer(text=f"Card ID: {card_id}")
+        
+        # Add timestamp for certain contexts
+        if context_type in ["daily", "claimed"]:
+            embed.timestamp = datetime.now()
+            
+        return embed
+
+    @card_group.command(name='config')
+    @commands.has_permissions(administrator=True)
+    async def config_system(self, ctx):
+        """View and configure trading card system settings (Admin only)"""
+        # Get current stats
+        self.cursor.execute("SELECT COUNT(*) FROM cards")
+        total_cards = self.cursor.fetchone()[0]
+        
+        self.cursor.execute("SELECT rarity, COUNT(*) FROM cards GROUP BY rarity ORDER BY COUNT(*) DESC")
+        rarity_stats = self.cursor.fetchall()
+        
+        self.cursor.execute("SELECT COUNT(*) FROM user_cards")
+        total_owned = self.cursor.fetchone()[0]
+        
+        embed = discord.Embed(
+            title="⚙️ Trading Card System Configuration",
+            description="Current system settings and statistics",
+            color=0x7289da
+        )
+        
+        # Current drop rates
+        embed.add_field(
+            name="🎲 Drop Probabilities", 
+            value="⚪ Common: 70%\n🟢 Uncommon: 20%\n🔵 Rare: 8%\n🟡 Legendary: 2%",
+            inline=True
+        )
+        
+        # Random drop settings
+        embed.add_field(
+            name="🔄 Random Drops",
+            value="Every 30 minutes\n5% chance per check\nRequires 3+ recent messages",
+            inline=True
+        )
+        
+        # System stats
+        card_breakdown = "\n".join([f"{self.get_rarity_emoji(rarity)} {rarity}: {count}" for rarity, count in rarity_stats])
+        embed.add_field(
+            name="📊 System Stats",
+            value=f"Total Cards: {total_cards}\nTotal Owned: {total_owned}\n\n{card_breakdown or 'No cards created yet'}",
+            inline=False
+        )
+        
+        # Available config commands
+        embed.add_field(
+            name="🛠️ Configuration Commands",
+            value="`!card dropchannel #channel` - Set drop channel\n`!card droprate <1-100>` - Set random drop chance\n`!card info system` - Detailed system info",
+            inline=False
+        )
+        
+        await ctx.send(embed=embed)
+
+    @card_group.command(name='dropchannel')
+    @commands.has_permissions(administrator=True)
+    async def set_drop_channel(self, ctx, channel: discord.TextChannel = None):
+        """Set the channel for random card drops (Admin only)"""
+        if not channel:
+            channel = ctx.channel
+        
+        # Set the drop channel
+        self.set_drop_channel(ctx.guild.id, channel.id)
+        
+        embed = discord.Embed(
+            title="📍 Drop Channel Set",
+            description=f"Random card drops will now appear in {channel.mention}",
+            color=0x00ff00
+        )
+        embed.add_field(name="Drop Settings", value="Every 30 minutes\n5% chance if channel is active", inline=True)
+        embed.set_footer(text="Cards will only drop if there are 3+ messages in the last hour")
+        
+        await ctx.send(embed=embed)
+
+    @card_group.command(name='drop')
+    @commands.has_permissions(administrator=True)
+    async def manual_drop(self, ctx, channel: discord.TextChannel = None, *, card_name: str = None):
+        """Manually drop a card in a channel (Admin only)"""
+        if not channel:
+            channel = ctx.channel
+        
+        # If specific card name provided, try to find it
+        if card_name:
+            self.cursor.execute("SELECT * FROM cards WHERE name LIKE ?", (f"%{card_name}%",))
+            card = self.cursor.fetchone()
+            if not card:
+                await ctx.send(f"❌ No card found matching '{card_name}'!")
+                return
+        else:
+            # Get random card if no specific card requested
+            card = self.get_random_card()
+            if not card:
+                await ctx.send("❌ No cards available to drop!")
+                return
+        
+        # Create the drop embed
+        embed = self.create_card_embed(card, "admin_drop", {"dropped_by": ctx.author.mention})
+        
+        # Send to target channel
+        message = await channel.send(embed=embed)
+        await message.add_reaction('🃏')
+        
+        # Confirm to admin
+        confirm_embed = discord.Embed(
+            title="✅ Card Dropped Successfully",
+            description=f"Dropped **{card[1]}** in {channel.mention}",
+            color=0x00ff00
+        )
+        await ctx.send(embed=confirm_embed)
+        
+        # Wait for someone to claim it
+        def check(reaction, user):
+            return str(reaction.emoji) == '🃏' and reaction.message.id == message.id and not user.bot
+        
+        try:
+            reaction, user = await self.bot.wait_for('reaction_add', timeout=600.0, check=check)  # 10 minutes
+            
+            # Give card to user
+            self.cursor.execute("INSERT INTO user_cards (user_id, card_id) VALUES (?, ?)", (user.id, card[0]))
+            self.conn.commit()
+            
+            # Success message
+            success_embed = self.create_card_embed(card, "claimed", {"user": user})
+            await channel.send(embed=success_embed)
+            
+            print(f"Manual drop: {user.name} claimed {card[1]} in {channel.name} (dropped by {ctx.author.name})")
+            
+        except asyncio.TimeoutError:
+            # Timeout - card escaped
+            timeout_embed = self.create_card_embed(card, "claimed", {"status": "escaped"})
+            await message.edit(embed=timeout_embed)
+
+    @card_group.command(name='droprate')
+    @commands.has_permissions(administrator=True)
+    async def set_drop_rate(self, ctx, rate: int):
+        """Set random drop chance percentage (1-100) (Admin only)"""
+        if not 1 <= rate <= 100:
+            await ctx.send("❌ Drop rate must be between 1 and 100!")
+            return
+        
+        # This would require modifying the random_drops method, for now just show current
+        embed = discord.Embed(
+            title="⚠️ Drop Rate Configuration",
+            description="Drop rate configuration is currently hardcoded to 5%",
+            color=0xffa500
+        )
+        embed.add_field(name="Requested Rate", value=f"{rate}%", inline=True)
+        embed.add_field(name="Current Rate", value="5% (hardcoded)", inline=True)
+        embed.add_field(name="Note", value="This feature requires code modification to make dynamic", inline=False)
+        
+        await ctx.send(embed=embed)
+
+    @card_group.command(name='stats', aliases=['statistics'])
+    @commands.has_permissions(administrator=True)
+    async def system_stats(self, ctx):
+        """View detailed system statistics (Admin only)"""
+        # Get comprehensive stats
+        self.cursor.execute("SELECT COUNT(*) FROM cards")
+        total_cards = self.cursor.fetchone()[0]
+        
+        self.cursor.execute("SELECT COUNT(DISTINCT user_id) FROM user_cards")
+        unique_collectors = self.cursor.fetchone()[0]
+        
+        self.cursor.execute("SELECT COUNT(*) FROM user_cards")
+        total_cards_owned = self.cursor.fetchone()[0]
+        
+        self.cursor.execute("SELECT COUNT(*) FROM trades")
+        total_trades = self.cursor.fetchone()[0]
+        
+        # Rarity breakdown
+        self.cursor.execute('''
+            SELECT c.rarity, COUNT(DISTINCT c.id) as unique_cards, COUNT(uc.id) as total_owned
+            FROM cards c
+            LEFT JOIN user_cards uc ON c.id = uc.card_id
+            GROUP BY c.rarity
+            ORDER BY 
+                CASE c.rarity 
+                    WHEN 'Legendary' THEN 1 
+                    WHEN 'Rare' THEN 2 
+                    WHEN 'Uncommon' THEN 3 
+                    WHEN 'Common' THEN 4 
+                END
+        ''')
+        rarity_breakdown = self.cursor.fetchall()
+        
+        # Top collectors
+        self.cursor.execute('''
+            SELECT uc.user_id, COUNT(DISTINCT c.name) as unique_cards, COUNT(*) as total_cards
+            FROM user_cards uc
+            JOIN cards c ON uc.card_id = c.id
+            GROUP BY uc.user_id
+            ORDER BY unique_cards DESC, total_cards DESC
+            LIMIT 5
+        ''')
+        top_collectors = self.cursor.fetchall()
+        
+        embed = discord.Embed(
+            title="📈 Trading Card System Statistics",
+            color=0x7289da
+        )
+        
+        # Overall stats
+        embed.add_field(
+            name="🎯 Overview",
+            value=f"Total Cards Created: {total_cards}\nUnique Collectors: {unique_collectors}\nCards in Circulation: {total_cards_owned}\nTotal Trades: {total_trades}",
+            inline=True
+        )
+        
+        # Rarity breakdown
+        rarity_text = ""
+        for rarity, unique, owned in rarity_breakdown:
+            emoji = self.get_rarity_emoji(rarity)
+            rarity_text += f"{emoji} {rarity}: {unique} cards ({owned} owned)\n"
+        
+        if rarity_text:
+            embed.add_field(
+                name="🎨 By Rarity",
+                value=rarity_text,
+                inline=True
+            )
+        
+        # Top collectors
+        if top_collectors:
+            collector_text = ""
+            for i, (user_id, unique, total) in enumerate(top_collectors, 1):
+                user = self.bot.get_user(user_id)
+                name = user.display_name if user else f"User {user_id}"
+                collector_text += f"{i}. {name}: {unique} unique ({total} total)\n"
+            
+            embed.add_field(
+                name="🏆 Top Collectors",
+                value=collector_text,
+                inline=False
+            )
+        
+        # Activity stats
+        self.cursor.execute("SELECT COUNT(*) FROM user_settings WHERE last_daily IS NOT NULL")
+        active_daily_users = self.cursor.fetchone()[0]
+        
+        embed.add_field(
+            name="📊 Activity",
+            value=f"Users with Daily Claims: {active_daily_users}",
+            inline=True
+        )
+        
+        embed.set_footer(text="Use !card config for system configuration options")
+        
+        await ctx.send(embed=embed)
+
+    @card_group.command(name='rarity')
+    async def explain_rarity(self, ctx):
+        """Explain the rarity system"""
+        embed = discord.Embed(
+            title="🌟 Trading Card Rarity System",
+            description="Understanding card rarities and drop rates",
+            color=0xffd700
+        )
+        
+        embed.add_field(
+            name="⚪ Common Cards",
+            value="**70% drop chance**\nEasiest to find\nOften server memes or inside jokes",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="🟢 Uncommon Cards", 
+            value="**20% drop chance**\nModerately rare\nSpecial moments or popular content",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="🔵 Rare Cards",
+            value="**8% drop chance**\nHard to find\nSignificant server events",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="🟡 Legendary Cards",
+            value="**2% drop chance**\nExtremely rare\nServer milestones, founder cards",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="🎲 How Drops Work",
+            value="• Daily claims: Random card based on rarity weights\n• Random drops: 5% chance every 30 minutes in active channels\n• Trading: Get specific cards from other users",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="💡 Tips",
+            value="• Trade common cards for rarer ones\n• Check daily for your free card\n• Be active in chat for random drops\n• Use `!card collection` to see what you have",
+            inline=False
+        )
+        
+        await ctx.send(embed=embed)
 
 async def setup(bot):
     await bot.add_cog(TradingCards(bot)) 
