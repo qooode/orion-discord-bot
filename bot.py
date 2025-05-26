@@ -4261,6 +4261,23 @@ async def check_quarantine_expirations():
 async def before_quarantine_check():
     await bot.wait_until_ready()
 
+# Force sync commands with a regular command
+@bot.command(name="sync")
+@commands.has_permissions(administrator=True)
+async def sync_commands(ctx):
+    try:
+        print("Force syncing commands...")
+        await ctx.send("Syncing slash commands to this server, please wait...")
+        
+        # Sync to the current guild
+        synced = await bot.tree.sync(guild=ctx.guild)
+        
+        await ctx.send(f"✅ Successfully synced {len(synced)} commands to this server!")
+        print(f"Synced {len(synced)} commands to {ctx.guild.name}")
+    except Exception as e:
+        await ctx.send(f"❌ Error syncing commands: {e}")
+        print(f"Error syncing commands: {e}")
+
 # Run the bot
 if __name__ == "__main__":
     # Check if token is available
