@@ -40,7 +40,9 @@ def check_dependencies():
             return True
         except subprocess.CalledProcessError:
             print("❌ Failed to install dependencies. Please run manually:")
-            print("pip install discord.py python-dotenv")
+            print("pip3 install -r requirements.txt")
+            print("OR:")
+            print("pip3 install discord.py python-dotenv")
             return False
     
     return True

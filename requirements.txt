@@ -1,2 +1,16 @@
-discord.py>=2.0.0
-python-dotenv>=0.19.0
+# Orion Discord Bot - Dependencies
+# Install with: pip install -r requirements.txt
+
+# Core Discord API library
+discord.py>=2.3.0
+
+# Environment variable management (for bot.env file)
+python-dotenv>=1.0.0
+
+# Optional: Better performance and stability
+# aiohttp>=3.8.0
+
+# Development dependencies (optional)
+# pytest>=7.0.0        # For testing
+# black>=22.0.0         # Code formatting
+# flake8>=4.0.0         # Code linting

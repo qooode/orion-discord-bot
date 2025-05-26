@@ -2,7 +2,77 @@
 
 A powerful Discord moderation bot with advanced features, completely restructured into a clean modular architecture for better maintainability and scalability.
 
+## 🚀 **Production Deployment (Recommended)**
+
+### **Option 1: Automated Deployment (Easiest)**
+```bash
+# One-command deployment (handles everything automatically)
+curl -sSL https://raw.githubusercontent.com/qooode/orion-discord-bot/main/deploy.sh | bash
+
+# OR download and run locally
+wget https://raw.githubusercontent.com/qooode/orion-discord-bot/main/deploy.sh
+chmod +x deploy.sh
+./deploy.sh
+```
+
+### **Option 2: Manual Setup from Scratch**
+```bash
+# 1. Stop any existing bot processes
+pkill -f "python.*main.py"
+pkill -f "python.*bot.py"
+
+# 2. Clean setup directory 
+mkdir orion-bot
+cd orion-bot
+rm -rf orion-discord-bot  # Remove if exists
+
+# 3. Clone the repository
+git clone https://github.com/qooode/orion-discord-bot.git
+cd orion-discord-bot
+
+# 4. Create and activate virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# 5. Install dependencies
+pip install -r requirements.txt
+
+# 6. Configure environment (IMPORTANT!)
+nano bot.env
+# Edit the file:
+# DISCORD_TOKEN=your_actual_bot_token_here
+# COMMAND_PREFIX=!
+
+# 7. Run bot in background (production)
+nohup python3 main.py > bot.log 2>&1 &
+
+# 8. Check if bot is running
+ps aux | grep main.py
+tail -f bot.log  # Monitor logs
+```
+
+### **Quick Process Management**
+```bash
+# Check running bot processes
+ps aux | grep -E "(main\.py|bot\.py)"
+
+# Stop bot gracefully
+pkill -f "python.*main.py"
+
+# Force kill if needed
+pkill -9 -f "python.*main.py"
+
+# Restart bot
+source venv/bin/activate
+nohup python3 main.py > bot.log 2>&1 &
+```
+
 ## 🚀 **Quick Start (New Modular System)**
+
+### **For Production Servers (See Above)**
+Use the **Production Deployment** section above for live Discord servers.
+
+### **For Development/Testing**
 
 ### **Option 1: Automatic Setup (Recommended)**
 ```bash
@@ -12,8 +82,11 @@ python3 start_bot.py
 
 ### **Option 2: Manual Setup**
 ```bash
-# Step 1: Install dependencies
-pip3 install discord.py python-dotenv
+# Step 1: Install dependencies using requirements.txt
+pip3 install -r requirements.txt
+
+# Alternative: Install individually
+# pip3 install discord.py python-dotenv
 
 # Step 2: Create bot.env file
 echo "DISCORD_TOKEN=your_bot_token_here" > bot.env
@@ -36,6 +109,9 @@ python3 main.py
 ```
 Orion/
 ├── main.py                 # 🚀 NEW ENTRY POINT - Use this!
+├── start_bot.py            # 🛠️ Easy startup script with dependency checking
+├── deploy.sh               # 🔧 Automated production deployment script
+├── requirements.txt        # 📦 Python dependencies list
 ├── config.py              # ⚙️ Configuration settings and constants  
 ├── data_manager.py         # 💾 JSON data loading/saving functions
 ├── events.py              # 📡 Discord event handlers
@@ -51,7 +127,8 @@ Orion/
 ├── backups/               # 💾 Automatic data backups
 ├── *.json                 # 📊 Data files (warnings, quarantine, etc.)
 ├── README.md              # 📖 This file
-└── MIGRATION_GUIDE.md     # 📋 Migration details
+├── MIGRATION_GUIDE.md     # 📋 Migration details
+└── ABOUT_BACKUP.md        # ℹ️ Information about the backup file
 ```
 
 ## ✨ **Available Commands**
@@ -180,6 +257,57 @@ The bot automatically manages these data files:
 1. Make sure all files are in correct directories
 2. Check that `__init__.py` files exist in command folders
 3. Verify Python path includes the bot directory
+
+## 🔍 **Production Monitoring**
+
+### **Log Monitoring**
+```bash
+# View real-time logs
+tail -f bot.log
+
+# View last 100 lines
+tail -n 100 bot.log
+
+# Search for errors
+grep -i error bot.log
+grep -i exception bot.log
+
+# Monitor bot status
+watch "ps aux | grep main.py"
+```
+
+### **Automatic Restart (Optional)**
+Create a simple restart script:
+```bash
+# create restart_bot.sh
+#!/bin/bash
+pkill -f "python.*main.py"
+sleep 2
+cd /path/to/orion-discord-bot
+source venv/bin/activate
+nohup python3 main.py > bot.log 2>&1 &
+echo "Bot restarted at $(date)"
+```
+
+### **System Service (Advanced)**
+For automatic startup on system boot, create a systemd service:
+```bash
+# /etc/systemd/system/orion-bot.service
+[Unit]
+Description=Orion Discord Bot
+After=network.target
+
+[Service]
+Type=simple
+User=your-username
+WorkingDirectory=/path/to/orion-discord-bot
+Environment=PATH=/path/to/orion-discord-bot/venv/bin
+ExecStart=/path/to/orion-discord-bot/venv/bin/python main.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
 
 ## 🔄 **Migration from Old Bot**
 
