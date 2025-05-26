@@ -472,12 +472,12 @@ async def on_message(message):
     if message.author.bot:
         return
     
-    # Process commands
-    await bot.process_commands(message)
-    
     # Skip DMs
     if not message.guild:
         return
+        
+    # Always process commands AFTER checking quarantine status
+    # This ensures we mirror messages before processing them as commands
     
     # Check if message is from a quarantined user
     guild_id = str(message.guild.id)
@@ -518,7 +518,19 @@ async def on_message(message):
                     
                 # For debugging: log to console
                 print(f"Quarantined user {message.author.name} said: {content}")
+                
+                # DM the user - handle errors gracefully
+                try:
+                    await message.author.send(embed=embed)
+                    print(f"Successfully sent DM to {message.author.display_name} about their quarantine")
+                except discord.Forbidden:
+                    print(f"Could not DM {message.author.display_name} - they have DMs disabled or blocked the bot")
+                except Exception as e:
+                    print(f"Could not DM {message.author.display_name}: {e}")
+                    
 
+    # Process commands AFTER checking quarantine status
+    await bot.process_commands(message)
     
     # Auto-moderate content (from earlier code)
     content = message.content.lower()
@@ -3336,12 +3348,26 @@ async def quarantine_user(interaction: discord.Interaction, user: discord.Member
         await quarantine_channel.set_permissions(user, view_channel=True, read_messages=True, send_messages=True,
                                               reason=f"Quarantine: {reason}")
         
-        # Remove all roles
+        # Remove all roles - handle permission errors gracefully
+        roles_removed = 0
+        roles_failed = 0
         try:
             for role in user.roles:
                 if not role.is_default():
-                    await user.remove_roles(role, reason=f"Quarantine: {reason}")
+                    try:
+                        await user.remove_roles(role, reason=f"Quarantine: {reason}")
+                        roles_removed += 1
+                    except discord.Forbidden:
+                        roles_failed += 1
+                    except Exception as e:
+                        print(f"Error removing role {role.name}: {e}")
+                        roles_failed += 1
+                        
+            if roles_failed > 0:
+                print(f"Warning: Could not remove {roles_failed} roles due to permissions. Successfully removed {roles_removed} roles.")
+                await interaction.followup.send(f"Warning: Could not remove all roles due to missing permissions. This might be because the bot's role is lower than some of the user's roles.", ephemeral=True)
         except Exception as e:
+            print(f"Error removing roles: {e}")
             await interaction.followup.send(f"Warning: Could not remove all roles: {str(e)}", ephemeral=True)
         
         # Send stylish message in original channel (no mentions)
