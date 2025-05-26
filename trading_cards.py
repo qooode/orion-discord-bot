@@ -128,7 +128,7 @@ class TradingCards(commands.Cog):
             
             embed.add_field(
                 name="🛠️ Admin - System Configuration",
-                value="`!card config` - View system settings & stats\n`!card stats` - Detailed system statistics\n`!card dropchannel #channel` - Set random drop channel\n`!card drop [#channel] [card]` - Manual card drop",
+                value="`!card config` - View system settings & stats\n`!card systemstats` - Detailed system statistics\n`!card dropchannel #channel` - Set random drop channel\n`!card drop [#channel] [card]` - Manual card drop\n`!card backup` - Export database backup\n`!card restore` - Import database backup",
                 inline=False
             )
             
@@ -1102,7 +1102,7 @@ class TradingCards(commands.Cog):
         
         await ctx.send(embed=embed)
 
-    @card_group.command(name='stats', aliases=['statistics'])
+    @card_group.command(name='systemstats', aliases=['adminstats'])
     @commands.has_permissions(administrator=True)
     async def system_stats(self, ctx):
         """View detailed system statistics (Admin only)"""
@@ -1245,6 +1245,304 @@ class TradingCards(commands.Cog):
         )
         
         await ctx.send(embed=embed)
+
+    @card_group.command(name='backup')
+    @commands.has_permissions(administrator=True)
+    async def backup_database(self, ctx):
+        """Export trading card database as downloadable file (Admin only)"""
+        try:
+            # Create backup data structure
+            backup_data = {
+                "timestamp": datetime.now().isoformat(),
+                "version": "1.0",
+                "bot_info": "Orion Trading Cards System",
+                "cards": [],
+                "user_cards": [],
+                "trades": [],
+                "user_settings": []
+            }
+            
+            # Export all cards
+            self.cursor.execute("SELECT * FROM cards")
+            cards = self.cursor.fetchall()
+            for card in cards:
+                backup_data["cards"].append({
+                    "id": card[0],
+                    "name": card[1],
+                    "description": card[2],
+                    "rarity": card[3],
+                    "image_url": card[4],
+                    "created_by": card[5],
+                    "created_at": card[6]
+                })
+            
+            # Export all user cards
+            self.cursor.execute("SELECT * FROM user_cards")
+            user_cards = self.cursor.fetchall()
+            for user_card in user_cards:
+                backup_data["user_cards"].append({
+                    "id": user_card[0],
+                    "user_id": user_card[1],
+                    "card_id": user_card[2],
+                    "obtained_at": user_card[3]
+                })
+            
+            # Export all trades
+            self.cursor.execute("SELECT * FROM trades")
+            trades = self.cursor.fetchall()
+            for trade in trades:
+                backup_data["trades"].append({
+                    "id": trade[0],
+                    "from_user": trade[1],
+                    "to_user": trade[2],
+                    "card_id": trade[3],
+                    "traded_at": trade[4]
+                })
+            
+            # Export user settings
+            self.cursor.execute("SELECT * FROM user_settings")
+            settings = self.cursor.fetchall()
+            for setting in settings:
+                backup_data["user_settings"].append({
+                    "user_id": setting[0],
+                    "last_daily": setting[1],
+                    "total_cards": setting[2],
+                    "cards_found": setting[3]
+                })
+            
+            # Create backup file
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"trading_cards_backup_{timestamp}.json"
+            
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                json.dump(backup_data, f, indent=2)
+                temp_path = f.name
+            
+            # Create embed
+            embed = discord.Embed(
+                title="📦 Trading Cards Database Backup",
+                description="Your complete trading card system backup is ready!",
+                color=0x00ff00
+            )
+            embed.add_field(name="📊 Backup Contents", value=f"🃏 Cards: {len(backup_data['cards'])}\n👥 User Collections: {len(backup_data['user_cards'])}\n🔄 Trade History: {len(backup_data['trades'])}\n⚙️ User Settings: {len(backup_data['user_settings'])}", inline=True)
+            embed.add_field(name="📅 Created", value=f"<t:{int(datetime.now().timestamp())}:F>", inline=True)
+            embed.add_field(name="💾 File Size", value=f"{os.path.getsize(temp_path) / 1024:.1f} KB", inline=True)
+            embed.add_field(name="🔄 Restore", value="Use `!card restore` and upload this file to restore your data", inline=False)
+            embed.set_footer(text="Keep this file safe! It contains your entire trading card system.")
+            
+            # Send file
+            with open(temp_path, 'rb') as f:
+                discord_file = discord.File(f, filename=filename)
+                await ctx.send(embed=embed, file=discord_file)
+            
+            # Clean up temp file
+            os.unlink(temp_path)
+            
+            print(f"Trading cards backup created by {ctx.author.name}: {len(backup_data['cards'])} cards, {len(backup_data['user_cards'])} user cards")
+            
+        except Exception as e:
+            error_embed = discord.Embed(
+                title="❌ Backup Failed",
+                description=f"Failed to create backup: {str(e)}",
+                color=0xff0000
+            )
+            await ctx.send(embed=error_embed)
+            print(f"Backup error: {e}")
+
+    @card_group.command(name='restore')
+    @commands.has_permissions(administrator=True)
+    async def restore_database(self, ctx):
+        """Restore trading card database from uploaded file (Admin only)"""
+        if not ctx.message.attachments:
+            embed = discord.Embed(
+                title="📥 Restore Trading Cards Database",
+                description="Upload a trading cards backup file to restore your data.",
+                color=0xffa500
+            )
+            embed.add_field(name="📋 Instructions", value="1. Run this command\n2. Attach your backup .json file\n3. Confirm the restore operation", inline=False)
+            embed.add_field(name="⚠️ Warning", value="This will REPLACE all current trading card data!", inline=False)
+            embed.add_field(name="💡 Tip", value="Create a backup first with `!card backup`", inline=False)
+            await ctx.send(embed=embed)
+            return
+        
+        attachment = ctx.message.attachments[0]
+        
+        # Validate file
+        if not attachment.filename.endswith('.json'):
+            await ctx.send("❌ Please upload a .json backup file!")
+            return
+        
+        if attachment.size > 50 * 1024 * 1024:  # 50MB limit
+            await ctx.send("❌ File too large! Maximum size is 50MB.")
+            return
+        
+        try:
+            # Download and parse file
+            backup_data = json.loads(await attachment.read())
+            
+            # Validate backup structure
+            required_keys = ["cards", "user_cards", "trades", "user_settings"]
+            if not all(key in backup_data for key in required_keys):
+                await ctx.send("❌ Invalid backup file format!")
+                return
+            
+            # Show preview
+            preview_embed = discord.Embed(
+                title="🔍 Backup File Preview",
+                description="Found valid trading cards backup. Review before restoring:",
+                color=0xffa500
+            )
+            preview_embed.add_field(name="📊 Contents", value=f"🃏 Cards: {len(backup_data['cards'])}\n👥 User Collections: {len(backup_data['user_cards'])}\n🔄 Trade History: {len(backup_data['trades'])}\n⚙️ User Settings: {len(backup_data['user_settings'])}", inline=True)
+            
+            if "timestamp" in backup_data:
+                try:
+                    backup_time = datetime.fromisoformat(backup_data["timestamp"])
+                    preview_embed.add_field(name="📅 Backup Date", value=f"<t:{int(backup_time.timestamp())}:F>", inline=True)
+                except:
+                    pass
+            
+            preview_embed.add_field(name="⚠️ WARNING", value="This will COMPLETELY REPLACE your current trading card database!\n\nReact with ✅ to confirm or ❌ to cancel.", inline=False)
+            
+            message = await ctx.send(embed=preview_embed)
+            await message.add_reaction('✅')
+            await message.add_reaction('❌')
+            
+            def check(reaction, user):
+                return user == ctx.author and str(reaction.emoji) in ['✅', '❌'] and reaction.message.id == message.id
+            
+            try:
+                reaction, _ = await self.bot.wait_for('reaction_add', timeout=60.0, check=check)
+                
+                if str(reaction.emoji) == '✅':
+                    # Perform restore
+                    await self.perform_restore(ctx, backup_data, message)
+                else:
+                    cancel_embed = discord.Embed(
+                        title="❌ Restore Cancelled",
+                        description="Database restore was cancelled.",
+                        color=0x808080
+                    )
+                    await message.edit(embed=cancel_embed)
+                    
+            except asyncio.TimeoutError:
+                timeout_embed = discord.Embed(
+                    title="⏰ Restore Timed Out",
+                    description="Restore confirmation timed out.",
+                    color=0x808080
+                )
+                await message.edit(embed=timeout_embed)
+                
+        except json.JSONDecodeError:
+            await ctx.send("❌ Invalid JSON file! Please upload a valid backup file.")
+        except Exception as e:
+            await ctx.send(f"❌ Error reading backup file: {str(e)}")
+
+    async def perform_restore(self, ctx, backup_data, message):
+        """Perform the actual database restore"""
+        try:
+            # Create progress embed
+            progress_embed = discord.Embed(
+                title="🔄 Restoring Database...",
+                description="Please wait while the database is restored.",
+                color=0xffa500
+            )
+            await message.edit(embed=progress_embed)
+            
+            # Clear existing data
+            self.cursor.execute("DELETE FROM user_cards")
+            self.cursor.execute("DELETE FROM trades") 
+            self.cursor.execute("DELETE FROM user_settings")
+            self.cursor.execute("DELETE FROM cards")
+            
+            # Reset auto-increment
+            self.cursor.execute("DELETE FROM sqlite_sequence WHERE name IN ('cards', 'user_cards', 'trades')")
+            
+            # Restore cards
+            cards_added = 0
+            for card_data in backup_data["cards"]:
+                self.cursor.execute(
+                    "INSERT INTO cards (name, description, rarity, image_url, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (card_data["name"], card_data["description"], card_data["rarity"], 
+                     card_data["image_url"], card_data["created_by"], card_data["created_at"])
+                )
+                cards_added += 1
+            
+            # Create card ID mapping (old ID -> new ID)
+            self.cursor.execute("SELECT id, name FROM cards ORDER BY id")
+            new_cards = {card_data["name"]: new_id for new_id, _ in self.cursor.fetchall() for card_data in backup_data["cards"] if card_data["name"] == _}
+            
+            # Restore user cards
+            user_cards_added = 0
+            for user_card_data in backup_data["user_cards"]:
+                # Find the new card ID
+                old_card_id = user_card_data["card_id"]
+                card_name = None
+                for card_data in backup_data["cards"]:
+                    if card_data["id"] == old_card_id:
+                        card_name = card_data["name"]
+                        break
+                
+                if card_name and card_name in new_cards:
+                    new_card_id = new_cards[card_name]
+                    self.cursor.execute(
+                        "INSERT INTO user_cards (user_id, card_id, obtained_at) VALUES (?, ?, ?)",
+                        (user_card_data["user_id"], new_card_id, user_card_data["obtained_at"])
+                    )
+                    user_cards_added += 1
+            
+            # Restore trades
+            trades_added = 0
+            for trade_data in backup_data["trades"]:
+                old_card_id = trade_data["card_id"]
+                card_name = None
+                for card_data in backup_data["cards"]:
+                    if card_data["id"] == old_card_id:
+                        card_name = card_data["name"]
+                        break
+                
+                if card_name and card_name in new_cards:
+                    new_card_id = new_cards[card_name]
+                    self.cursor.execute(
+                        "INSERT INTO trades (from_user, to_user, card_id, traded_at) VALUES (?, ?, ?, ?)",
+                        (trade_data["from_user"], trade_data["to_user"], new_card_id, trade_data["traded_at"])
+                    )
+                    trades_added += 1
+            
+            # Restore user settings
+            settings_added = 0
+            for setting_data in backup_data["user_settings"]:
+                self.cursor.execute(
+                    "INSERT INTO user_settings (user_id, last_daily, total_cards, cards_found) VALUES (?, ?, ?, ?)",
+                    (setting_data["user_id"], setting_data["last_daily"], 
+                     setting_data["total_cards"], setting_data["cards_found"])
+                )
+                settings_added += 1
+            
+            self.conn.commit()
+            
+            # Success embed
+            success_embed = discord.Embed(
+                title="✅ Database Restored Successfully!",
+                description="Your trading card database has been completely restored.",
+                color=0x00ff00
+            )
+            success_embed.add_field(name="📊 Restored", value=f"🃏 Cards: {cards_added}\n👥 User Collections: {user_cards_added}\n🔄 Trade History: {trades_added}\n⚙️ User Settings: {settings_added}", inline=True)
+            success_embed.add_field(name="✨ Status", value="All data restored successfully!\nTrading card system is ready.", inline=True)
+            success_embed.set_footer(text="Database restore completed")
+            
+            await message.edit(embed=success_embed)
+            
+            print(f"Trading cards database restored by {ctx.author.name}: {cards_added} cards, {user_cards_added} user cards")
+            
+        except Exception as e:
+            error_embed = discord.Embed(
+                title="❌ Restore Failed",
+                description=f"Failed to restore database: {str(e)}",
+                color=0xff0000
+            )
+            await message.edit(embed=error_embed)
+            print(f"Restore error: {e}")
 
 async def setup(bot):
     await bot.add_cog(TradingCards(bot)) 
