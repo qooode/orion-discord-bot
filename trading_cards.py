@@ -41,16 +41,23 @@ class CollectionView(discord.ui.View):
         card = self.cards[index]
         
         # Use the main card embed creation for consistency
-        embed, discord_file = self.trading_cards.create_card_embed(card, "collection")
+        data_embed, image_embed, discord_file = self.trading_cards.create_card_embeds(card, "collection")
         
         # Update the title for collection context
-        embed.title = f"🃏 {self.user.display_name}'s Collection - {card[1]}"
+        data_embed.title = f"🃏 {self.user.display_name}'s Collection - {card[1]}"
         
         # Update footer for collection navigation
-        embed.set_footer(text=f"Card {index + 1} of {len(self.cards)} in collection")
-        embed.timestamp = datetime.now()
+        data_embed.set_footer(text=f"Card {index + 1} of {len(self.cards)} in collection")
+        data_embed.timestamp = datetime.now()
         
-        return embed
+        # For collection view, we'll combine data and image info into one embed
+        # and use the View Image button for separate image display
+        if image_embed and not discord_file:  # URL images only
+            data_embed.set_image(url=image_embed.image.url if image_embed.image else None)
+        elif image_embed or discord_file:  # Has image (local or URL)
+            data_embed.add_field(name="🖼️ Has Image", value="Click 'View Image' button", inline=True)
+        
+        return data_embed
     
     def get_rarity_rate(self, rarity):
         """Get drop rate for rarity"""
@@ -64,7 +71,7 @@ class CollectionView(discord.ui.View):
     
     @discord.ui.button(label='← Previous', style=discord.ButtonStyle.secondary, emoji='⬅️')
     async def previous_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user != interaction.message.interaction.user:
+        if interaction.user != self.user:
             await interaction.response.send_message("❌ This is not your collection!", ephemeral=True)
             return
             
@@ -78,7 +85,7 @@ class CollectionView(discord.ui.View):
     
     @discord.ui.button(label='Card 1/X', style=discord.ButtonStyle.primary, emoji='📊')
     async def info_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user != interaction.message.interaction.user:
+        if interaction.user != self.user:
             await interaction.response.send_message("❌ This is not your collection!", ephemeral=True)
             return
             
@@ -104,7 +111,7 @@ class CollectionView(discord.ui.View):
     
     @discord.ui.button(label='Next →', style=discord.ButtonStyle.secondary, emoji='➡️')
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user != interaction.message.interaction.user:
+        if interaction.user != self.user:
             await interaction.response.send_message("❌ This is not your collection!", ephemeral=True)
             return
             
@@ -118,11 +125,11 @@ class CollectionView(discord.ui.View):
     
     @discord.ui.button(label='🖼️ View Image', style=discord.ButtonStyle.success, emoji='🖼️')
     async def image_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user != interaction.message.interaction.user:
+        if interaction.user != self.user:
             await interaction.response.send_message("❌ This is not your collection!", ephemeral=True)
             return
             
-        # Show full card with image using the main card info system
+        # Show full card with image using the new separate embeds system
         card = self.cards[self.current_index]
         card_id = card[0]
         
@@ -131,19 +138,24 @@ class CollectionView(discord.ui.View):
         full_card = self.trading_cards.cursor.fetchone()
         
         if full_card:
-            embed, discord_file = self.trading_cards.create_card_embed(full_card, "showcase")
-            embed.title = f"🖼️ {card[1]} - Full Image View"
+            data_embed, image_embed, discord_file = self.trading_cards.create_card_embeds(full_card, "showcase")
+            data_embed.title = f"🖼️ {card[1]} - Full View"
             
-            if discord_file:
-                await interaction.response.send_message(embed=embed, file=discord_file, ephemeral=True)
-            else:
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+            # Send data embed first
+            await interaction.response.send_message(embed=data_embed, ephemeral=True)
+            
+            # Send image embed if it exists
+            if image_embed:
+                if discord_file:
+                    await interaction.followup.send(embed=image_embed, file=discord_file, ephemeral=True)
+                else:
+                    await interaction.followup.send(embed=image_embed, ephemeral=True)
         else:
             await interaction.response.send_message("❌ Card not found!", ephemeral=True)
     
     @discord.ui.button(label='🎲 Random', style=discord.ButtonStyle.success, emoji='🎲')
     async def random_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user != interaction.message.interaction.user:
+        if interaction.user != self.user:
             await interaction.response.send_message("❌ This is not your collection!", ephemeral=True)
             return
             
@@ -422,12 +434,18 @@ class TradingCards(commands.Cog):
         )
         self.conn.commit()
         
-        # Send card
-        embed, discord_file = self.create_card_embed(card, "daily")
-        if discord_file:
-            await ctx.send(embed=embed, file=discord_file)
-        else:
-            await ctx.send(embed=embed)
+        # Send card with separate embeds
+        data_embed, image_embed, discord_file = self.create_card_embeds(card, "daily")
+        
+        # Send data embed first
+        await ctx.send(embed=data_embed)
+        
+        # Send image embed if it exists
+        if image_embed:
+            if discord_file:
+                await ctx.send(embed=image_embed, file=discord_file)
+            else:
+                await ctx.send(embed=image_embed)
 
     @card_group.command(name='collection')
     async def view_collection(self, ctx, user: Optional[discord.Member] = None):
@@ -566,14 +584,18 @@ class TradingCards(commands.Cog):
             await ctx.send(f"❌ No card found matching '{card_name}'!")
             return
         
-        # Create beautiful card showcase
-        embed, discord_file = self.create_card_embed(card, "showcase")
+        # Create beautiful card showcase with separate embeds
+        data_embed, image_embed, discord_file = self.create_card_embeds(card, "showcase")
         
-        # Send with proper image handling
-        if discord_file:
-            await ctx.send(embed=embed, file=discord_file)
-        else:
-            await ctx.send(embed=embed)
+        # Send data embed first
+        await ctx.send(embed=data_embed)
+        
+        # Send image embed if it exists
+        if image_embed:
+            if discord_file:
+                await ctx.send(embed=image_embed, file=discord_file)
+            else:
+                await ctx.send(embed=image_embed)
 
     @card_group.command(name='stats')
     async def user_stats(self, ctx, user: Optional[discord.Member] = None):
@@ -845,35 +867,40 @@ class TradingCards(commands.Cog):
             if random.random() < 0.05:
                 card = self.get_random_card()
                 if card:
-                    embed, discord_file = self.create_card_embed(card, "drop")
-                    if discord_file:
-                        message = await channel.send(embed=embed, file=discord_file)
+                    # Send data embed first
+                    data_embed, image_embed, discord_file = self.create_card_embeds(card, "drop")
+                    await channel.send(embed=data_embed)
+                    
+                    # Send image embed if it exists
+                    if image_embed:
+                        if discord_file:
+                            message = await channel.send(embed=image_embed, file=discord_file)
+                        else:
+                            message = await channel.send(embed=image_embed)
                     else:
-                        message = await channel.send(embed=embed)
-                    await message.add_reaction('🃏')
+                        # If no image, use the data embed for reactions
+                        messages = await channel.history(limit=1).flatten()
+                        message = messages[0] if messages else None
                     
-                    def check(reaction, user):
-                        return str(reaction.emoji) == '🃏' and reaction.message.id == message.id and not user.bot
-                    
-                    try:
-                        reaction, user = await self.bot.wait_for('reaction_add', timeout=300.0, check=check)
+                    if message:
+                        await message.add_reaction('🃏')
                         
-                        # Give card to user
-                        self.cursor.execute("INSERT INTO user_cards (user_id, card_id) VALUES (?, ?)", (user.id, card[0]))
-                        self.conn.commit()
+                        def check(reaction, user):
+                            return str(reaction.emoji) == '🃏' and reaction.message.id == message.id and not user.bot
                         
-                        success_embed, success_file = self.create_card_embed(card, "claimed", {"user": user})
-                        if success_file:
-                            await channel.send(embed=success_embed, file=success_file)
-                        else:
-                            await channel.send(embed=success_embed)
-                        
-                    except asyncio.TimeoutError:
-                        timeout_embed, timeout_file = self.create_card_embed(card, "claimed", {"status": "escaped"})
-                        if timeout_file:
-                            await message.edit(embed=timeout_embed, attachments=[timeout_file])
-                        else:
-                            await message.edit(embed=timeout_embed)
+                        try:
+                            reaction, user = await self.bot.wait_for('reaction_add', timeout=300.0, check=check)
+                            
+                            # Give card to user
+                            self.cursor.execute("INSERT INTO user_cards (user_id, card_id) VALUES (?, ?)", (user.id, card[0]))
+                            self.conn.commit()
+                            
+                            # Simple claim message
+                            await channel.send(f"🎉 **{card[1]}** was claimed by {user.mention}! Nice catch!")
+                            
+                        except asyncio.TimeoutError:
+                            # Simple escape message
+                            await channel.send(f"💨 **{card[1]}** escaped! No one claimed it in time.")
 
     def set_drop_channel(self, guild_id: int, channel_id: int):
         """Set drop channel for a guild"""
@@ -961,8 +988,8 @@ class TradingCards(commands.Cog):
         }
         return emojis.get(rarity, '⚪')
 
-    def create_card_embed(self, card, context_type="display", extra_info=None):
-        """Create a beautiful card display embed - Returns (embed, file) tuple"""
+    def create_card_embeds(self, card, context_type="display", extra_info=None):
+        """Create beautiful card display embeds - Returns (data_embed, image_embed, discord_file) tuple"""
         # Handle different card tuple formats
         if len(card) == 7 and context_type == "collection":
             # Collection format: (id, name, description, rarity, image_url, created_at, count)
@@ -984,13 +1011,13 @@ class TradingCards(commands.Cog):
         if extra_info and extra_info.get("status") == "escaped":
             context_type = "escaped"
         
-        # Create the embed with card name as title and rarity-based color
+        # Create the DATA embed with card name as title and rarity-based color
         embed_color = self.get_rarity_color(rarity)
         if context_type == "escaped":
             embed_color = 0x808080  # Gray for escaped cards
             
-        # Use card name as title always
-        embed = discord.Embed(
+        # DATA EMBED - Card information
+        data_embed = discord.Embed(
             title=name,
             color=embed_color
         )
@@ -1013,42 +1040,21 @@ class TradingCards(commands.Cog):
             card_description += f"\n\n⚡ **React 🃏 to claim!**"
         elif context_type == "admin_drop":
             card_description += f"\n\n⚡ **React 🃏 to claim!**"
-        elif context_type == "claimed" and extra_info and "user" in extra_info:
-            user = extra_info["user"]
-            card_description += f"\n\n🎉 **Caught by {user.mention}!**"
-        elif context_type == "escaped":
-            card_description += f"\n\n💨 **Escaped unclaimed!**"
         elif context_type == "daily":
             card_description += f"\n\n🎁 **Daily card claimed!**"
             
-        embed.description = card_description
+        data_embed.description = card_description
         
-        # Handle images and return file if needed
-        discord_file = None
-        if image_url:
-            if image_url.startswith('http'):
-                # URL image - set directly
-                embed.set_image(url=image_url)
-            elif os.path.exists(image_url):
-                # Local file - create Discord file and reference it
-                try:
-                    file_extension = image_url.split('.')[-1] if '.' in image_url else 'jpg'
-                    filename = f"card_{card_id}.{file_extension}"
-                    discord_file = discord.File(image_url, filename=filename)
-                    embed.set_image(url=f"attachment://{filename}")
-                except Exception as e:
-                    print(f"Error loading image file {image_url}: {e}")
-        
-        # Add minimal essential info fields under the image
+        # Add minimal essential info fields
         if context_type == "collection" and count:
-            embed.add_field(name="🔢 Owned", value=f"x{count}", inline=True)
+            data_embed.add_field(name="🔢 Owned", value=f"x{count}", inline=True)
         
         if context_type in ["info", "showcase"]:
             # Get collectors count for info display
             self.cursor.execute("SELECT COUNT(DISTINCT user_id) FROM user_cards WHERE card_id = ?", (card_id,))
             result = self.cursor.fetchone()
             collectors = result[0] if result else 0
-            embed.add_field(name="👥 Collectors", value=str(collectors), inline=True)
+            data_embed.add_field(name="👥 Collectors", value=str(collectors), inline=True)
         
         # Always show drop rate (except for escaped)
         if context_type != "escaped":
@@ -1058,19 +1064,45 @@ class TradingCards(commands.Cog):
                 'Rare': "8%",
                 'Legendary': "2%"
             }
-            embed.add_field(name="📊 Drop Rate", value=rarity_rates.get(rarity, "Unknown"), inline=True)
+            data_embed.add_field(name="📊 Drop Rate", value=rarity_rates.get(rarity, "Unknown"), inline=True)
         
         # Card ID in all cases
-        embed.add_field(name="🆔 ID", value=f"#{card_id}", inline=True)
+        data_embed.add_field(name="🆔 ID", value=f"#{card_id}", inline=True)
         
         # Simple footer
-        embed.set_footer(text=f"Trading Card #{card_id}")
+        data_embed.set_footer(text=f"Trading Card #{card_id}")
         
         # Add timestamp for certain contexts
-        if context_type in ["daily", "claimed"]:
-            embed.timestamp = datetime.now()
+        if context_type in ["daily"]:
+            data_embed.timestamp = datetime.now()
+        
+        # IMAGE EMBED - Separate embed for image
+        image_embed = None
+        discord_file = None
+        
+        if image_url:
+            image_embed = discord.Embed(color=embed_color)
             
-        return embed, discord_file
+            if image_url.startswith('http'):
+                # URL image - set directly
+                image_embed.set_image(url=image_url)
+            elif os.path.exists(image_url):
+                # Local file - create Discord file and reference it
+                try:
+                    file_extension = image_url.split('.')[-1] if '.' in image_url else 'jpg'
+                    filename = f"card_{card_id}.{file_extension}"
+                    discord_file = discord.File(image_url, filename=filename)
+                    image_embed.set_image(url=f"attachment://{filename}")
+                except Exception as e:
+                    print(f"Error loading image file {image_url}: {e}")
+                    image_embed = None
+            
+        return data_embed, image_embed, discord_file
+    
+    def create_card_embed(self, card, context_type="display", extra_info=None):
+        """Legacy method - redirects to new embeds method for compatibility"""
+        data_embed, image_embed, discord_file = self.create_card_embeds(card, context_type, extra_info)
+        return data_embed, discord_file
 
     @card_group.command(name='config')
     @commands.has_permissions(administrator=True)
@@ -1164,15 +1196,25 @@ class TradingCards(commands.Cog):
                 await ctx.send("❌ No cards available to drop!")
                 return
         
-        # Create the drop embed
-        embed, discord_file = self.create_card_embed(card, "admin_drop", {"dropped_by": ctx.author.mention})
+        # Create the drop with separate embeds
+        data_embed, image_embed, discord_file = self.create_card_embeds(card, "admin_drop", {"dropped_by": ctx.author.mention})
         
-        # Send to target channel
-        if discord_file:
-            message = await channel.send(embed=embed, file=discord_file)
+        # Send data embed first
+        await channel.send(embed=data_embed)
+        
+        # Send image embed if it exists
+        if image_embed:
+            if discord_file:
+                message = await channel.send(embed=image_embed, file=discord_file)
+            else:
+                message = await channel.send(embed=image_embed)
         else:
-            message = await channel.send(embed=embed)
-        await message.add_reaction('🃏')
+            # If no image, use the data embed for reactions
+            messages = await channel.history(limit=1).flatten()
+            message = messages[0] if messages else None
+        
+        if message:
+            await message.add_reaction('🃏')
         
         # Confirm to admin
         confirm_embed = discord.Embed(
@@ -1193,22 +1235,14 @@ class TradingCards(commands.Cog):
             self.cursor.execute("INSERT INTO user_cards (user_id, card_id) VALUES (?, ?)", (user.id, card[0]))
             self.conn.commit()
             
-            # Success message
-            success_embed, success_file = self.create_card_embed(card, "claimed", {"user": user})
-            if success_file:
-                await channel.send(embed=success_embed, file=success_file)
-            else:
-                await channel.send(embed=success_embed)
+            # Simple claim message
+            await channel.send(f"🎉 **{card[1]}** was claimed by {user.mention}! Nice catch!")
             
             print(f"Manual drop: {user.name} claimed {card[1]} in {channel.name} (dropped by {ctx.author.name})")
             
         except asyncio.TimeoutError:
-            # Timeout - card escaped
-            timeout_embed, timeout_file = self.create_card_embed(card, "claimed", {"status": "escaped"})
-            if timeout_file:
-                await message.edit(embed=timeout_embed, attachments=[timeout_file])
-            else:
-                await message.edit(embed=timeout_embed)
+            # Simple escape message
+            await channel.send(f"💨 **{card[1]}** escaped! No one claimed it in time.")
 
     @card_group.command(name='droprate')
     @commands.has_permissions(administrator=True)
