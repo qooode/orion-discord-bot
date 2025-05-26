@@ -501,28 +501,21 @@ async def on_message(message):
                 jail_cam_channel = message.guild.get_channel(int(jail_cam_channel_id))
             
             if jail_cam_channel:
-                # Format the message content
-                content = message.content
+                # Format the message in a simple text format
+                content = message.content if message.content else "(No message content)"
                 
-                # Create a nice embed for the mirrored message
-                embed = discord.Embed(
-                    description=content if content else "(No message content)",
-                    color=discord.Color.dark_gray(),
-                    timestamp=message.created_at
-                )
-                embed.set_author(name=f"{message.author.display_name} (Quarantined)", icon_url=message.author.display_avatar.url)
-                
-                # Add channel info so we know where it was posted
-                embed.add_field(name="Channel", value=f"#{message.channel.name}", inline=True)
-                
-                # Include any attachments
+                # Add info about attachments if any
+                attachments_text = ""
                 if message.attachments:
-                    attachment_urls = "\n".join([f"[{attachment.filename}]({attachment.url})" for attachment in message.attachments])
-                    embed.add_field(name="Attachments", value=attachment_urls)
+                    attachment_list = ", ".join([attachment.filename for attachment in message.attachments])
+                    attachments_text = f" [Attached: {attachment_list}]"
+                
+                # Create the simple mirror message
+                mirror_message = f"**{message.author.display_name}** in #{message.channel.name} said: {content}{attachments_text}"
                 
                 # Send to jail-cam with better error handling
                 try:
-                    await jail_cam_channel.send(embed=embed)
+                    await jail_cam_channel.send(mirror_message)
                     print(f"Successfully mirrored message from {message.author.name} to jail-cam")
                 except Exception as e:
                     print(f"Failed to mirror message to jail-cam: {e}")
