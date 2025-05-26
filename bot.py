@@ -3980,16 +3980,43 @@ async def before_quarantine_check():
 async def forcesync(ctx):
     """Force syncs all commands to the current guild"""
     try:
-        # Clear the command tree for this guild
+        await ctx.send("Beginning complete command resync process...")
+        
+        # First, clear ALL commands globally
+        bot.tree.clear_commands(guild=None)
+        await bot.tree.sync()
+        await ctx.send("Cleared all global commands")
+        
+        # Then clear commands for this specific guild
+        bot.tree.clear_commands(guild=ctx.guild)
+        await bot.tree.sync(guild=ctx.guild)
+        await ctx.send("Cleared all guild commands")
+        
+        # Now sync the updated command tree
+        await bot.tree.sync(guild=ctx.guild)
+        
+        # Check what commands are now available
+        commands = await bot.tree.fetch_commands(guild=ctx.guild)
+        await ctx.send(f"✅ Complete resync finished! {len(commands)} commands now active in this guild")
+        await ctx.send(f"Commands: {', '.join([cmd.name for cmd in commands])}")
+    except Exception as e:
+        await ctx.send(f"❌ Error: {str(e)}")
+
+@bot.command(name="nukecommands")
+async def nukecommands(ctx):
+    """Completely removes ALL commands from the guild and globally"""
+    try:
+        await ctx.send("⚠️ NUKING ALL COMMANDS - THIS WILL REMOVE EVERYTHING!")
+        
+        # Clear global commands
+        bot.tree.clear_commands(guild=None)
+        await bot.tree.sync()
+        
+        # Clear guild commands
         bot.tree.clear_commands(guild=ctx.guild)
         await bot.tree.sync(guild=ctx.guild)
         
-        # Re-add all commands
-        await bot.tree.sync(guild=ctx.guild)
-        
-        commands = await bot.tree.fetch_commands(guild=ctx.guild)
-        await ctx.send(f"✅ Force synced {len(commands)} commands to this guild!")
-        await ctx.send(f"Commands: {', '.join([cmd.name for cmd in commands])}")
+        await ctx.send("🧨 All commands have been removed! Bot will need to be restarted to add commands back.")
     except Exception as e:
         await ctx.send(f"❌ Error: {str(e)}")
 
