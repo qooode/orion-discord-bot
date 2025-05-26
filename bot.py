@@ -3977,7 +3977,6 @@ async def before_quarantine_check():
 
 # Debug command to force sync all commands
 @bot.command(name="forcesync")
-@commands.is_owner()
 async def forcesync(ctx):
     """Force syncs all commands to the current guild"""
     try:
@@ -4011,7 +4010,7 @@ async def forcesync(ctx):
     app_commands.Choice(name="Disable", value=0)
 ])
 @app_commands.default_permissions(administrator=True)
-async def fresh_account_settings(interaction: discord.Interaction, action: str, age_threshold: int = 7, enabled: int = 1):
+async def configure_fresh_accounts(interaction: discord.Interaction, action: str, age_threshold: int = 7, enabled: int = 1):
     try:
         guild_id = str(interaction.guild.id)
         
