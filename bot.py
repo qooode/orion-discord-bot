@@ -483,51 +483,40 @@ async def on_message(message):
     guild_id = str(message.guild.id)
     user_id = str(message.author.id)
     
+    # Mirror ALL messages from quarantined users to jail-cam channel
     if guild_id in quarantine_data and user_id in quarantine_data[guild_id]:
-        user_data = quarantine_data[guild_id][user_id]
+        # Find the jail-cam channel
+        jail_cam_channel = discord.utils.get(message.guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
         
-        # Check if this is a quarantine channel and public viewing is enabled
-        # Note: We're removing the public_view check to ensure messages always display
-        if str(message.channel.id) == user_data.get("channel_id"):
-            # Mirror message to jail-cam channel
-            jail_cam_channel = discord.utils.get(message.guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
+        if jail_cam_channel:
+            # Format the message content
+            content = message.content
             
-            if jail_cam_channel:
-                # Format the message for jail-cam
-                content = message.content
+            # Create a nice embed for the mirrored message
+            embed = discord.Embed(
+                description=content if content else "(No message content)",
+                color=discord.Color.dark_gray(),
+                timestamp=message.created_at
+            )
+            embed.set_author(name=f"{message.author.display_name} (Quarantined)", icon_url=message.author.display_avatar.url)
+            
+            # Add channel info so we know where it was posted
+            embed.add_field(name="Channel", value=f"#{message.channel.name}", inline=True)
+            
+            # Include any attachments
+            if message.attachments:
+                attachment_urls = "\n".join([f"[{attachment.filename}]({attachment.url})" for attachment in message.attachments])
+                embed.add_field(name="Attachments", value=attachment_urls)
+            
+            # Send to jail-cam with better error handling
+            try:
+                await jail_cam_channel.send(embed=embed)
+                print(f"Successfully mirrored message from {message.author.name} to jail-cam")
+            except Exception as e:
+                print(f"Failed to mirror message to jail-cam: {e}")
                 
-                # Create a nice embed for the mirrored message
-                embed = discord.Embed(
-                    description=content if content else "(No message content)",
-                    color=discord.Color.dark_gray(),
-                    timestamp=message.created_at
-                )
-                embed.set_author(name=f"{message.author.display_name} (Quarantined)", icon_url=message.author.display_avatar.url)
-                
-                # Include any attachments
-                if message.attachments:
-                    attachment_urls = "\n".join([f"[{attachment.filename}]({attachment.url})" for attachment in message.attachments])
-                    embed.add_field(name="Attachments", value=attachment_urls)
-                
-                # Send to jail-cam - use await and make sure this doesn't fail silently
-                try:
-                    await jail_cam_channel.send(embed=embed)
-                    print(f"Mirrored message from {message.author.name} to jail-cam")
-                except Exception as e:
-                    print(f"Failed to mirror message to jail-cam: {e}")
-                    
-                # For debugging: log to console
-                print(f"Quarantined user {message.author.name} said: {content}")
-                
-                # DM the user - handle errors gracefully
-                try:
-                    await message.author.send(embed=embed)
-                    print(f"Successfully sent DM to {message.author.display_name} about their quarantine")
-                except discord.Forbidden:
-                    print(f"Could not DM {message.author.display_name} - they have DMs disabled or blocked the bot")
-                except Exception as e:
-                    print(f"Could not DM {message.author.display_name}: {e}")
-                    
+            # Debug log
+            print(f"Quarantined user {message.author.name} said: {content} in #{message.channel.name}") 
 
     # Process commands AFTER checking quarantine status
     await bot.process_commands(message)
