@@ -49,18 +49,37 @@ async def setup_quarantine_commands(bot):
             # Handle public jail-cam channel if enabled
             jail_cam_channel_id = None
             if public:
-                jail_cam_category = discord.utils.get(interaction.guild.categories, name="Public")
-                if not jail_cam_category:
-                    jail_cam_category = await interaction.guild.create_category("Public")
-                    
-                default_jail_cam = discord.utils.get(interaction.guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
-                if not default_jail_cam:
-                    default_jail_cam = await interaction.guild.create_text_channel(
-                        JAIL_CAM_CHANNEL_NAME,
-                        category=jail_cam_category,
-                        topic="See what quarantined users are saying!"
-                    )
-                jail_cam_channel_id = str(default_jail_cam.id)
+                # First priority: Check if server has a configured jail-cam channel
+                if guild_id in quarantine_data and "server_settings" in quarantine_data[guild_id]:
+                    server_jail_cam_id = quarantine_data[guild_id]["server_settings"].get("jail_cam_channel_id")
+                    if server_jail_cam_id:
+                        # Verify the channel still exists
+                        configured_channel = interaction.guild.get_channel(int(server_jail_cam_id))
+                        if configured_channel:
+                            jail_cam_channel_id = server_jail_cam_id
+                
+                # Second priority: If a specific jail-cam channel was provided as parameter, use it
+                if not jail_cam_channel_id and jail_cam_channel:
+                    jail_cam_channel_id = str(jail_cam_channel.id)
+                
+                # Third priority: Find or create the default jail-cam channel
+                if not jail_cam_channel_id:
+                    # Try to find existing default jail-cam channel
+                    default_jail_cam = discord.utils.get(interaction.guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
+                    if default_jail_cam:
+                        jail_cam_channel_id = str(default_jail_cam.id)
+                    else:
+                        # Create the default jail-cam channel
+                        jail_cam_category = discord.utils.get(interaction.guild.categories, name="Public")
+                        if not jail_cam_category:
+                            jail_cam_category = await interaction.guild.create_category("Public")
+                            
+                        default_jail_cam = await interaction.guild.create_text_channel(
+                            JAIL_CAM_CHANNEL_NAME,
+                            category=jail_cam_category,
+                            topic="See what quarantined users are saying! Configure with /setjailcam"
+                        )
+                        jail_cam_channel_id = str(default_jail_cam.id)
             
             # Save user's current roles
             user_roles = [role.id for role in user.roles if not role.is_default()]
@@ -165,9 +184,24 @@ async def setup_quarantine_commands(bot):
             else:
                 embed.add_field(name="Duration", value="Until manually released", inline=True)
                 
+            # Add prison break game explanation
+            embed.add_field(
+                name="🎮 Prison Break Game", 
+                value=(
+                    "**Moderators can start escape games with `/prisonbreak start`**\n\n"
+                    "**Game Stages:**\n"
+                    "🔓 **Stage 1:** Type 4-digit combinations like `1-2-3-4`\n"
+                    "🕳️ **Stage 2:** Type directions: `north`, `south`, `east`, `west`\n"
+                    "👮 **Stage 3:** Type hiding spots: `behind tree`, `in shadows`, etc.\n"
+                    "🚗 **Stage 4:** Work together - all type the secret code word!\n\n"
+                    "**Success = Reduced sentence • Failure = Extended sentence**"
+                ), 
+                inline=False
+            )
+            
             # Add footer with important info
             visibility = "visible to everyone in #jail-cam" if public else "only visible to moderators"
-            embed.set_footer(text=f"Your messages are {visibility} | Users can react with emojis and /throw items")
+            embed.set_footer(text=f"Your messages are {visibility} | Spectators can react with emojis and use /throw items")
             
             # Set user avatar as thumbnail
             embed.set_thumbnail(url=user.display_avatar.url)
@@ -499,12 +533,19 @@ async def setup_quarantine_commands(bot):
     ])
     @app_commands.default_permissions(administrator=True)
     async def prison_break(interaction: discord.Interaction, action: str, user: Optional[discord.Member] = None):
+        # IMMEDIATELY defer the response to prevent timeout
+        await interaction.response.defer(ephemeral=True)
+        
         guild_id = str(interaction.guild.id)
         
         try:
-            # Check if anyone is quarantined
-            if guild_id not in quarantine_data or not quarantine_data[guild_id]:
-                await interaction.response.send_message("❌ No one is currently quarantined! Prison break needs prisoners!", ephemeral=True)
+            # Check if anyone is quarantined (filter out server_settings)
+            quarantined_users = {}
+            if guild_id in quarantine_data:
+                quarantined_users = {k: v for k, v in quarantine_data[guild_id].items() if k != "server_settings"}
+            
+            if not quarantined_users:
+                await interaction.followup.send("❌ No one is currently quarantined! Prison break needs prisoners!", ephemeral=True)
                 return
                 
             if action == "start":
@@ -514,14 +555,14 @@ async def setup_quarantine_commands(bot):
                     
                 # If specific user, check they're quarantined
                 if user:
-                    if str(user.id) not in quarantine_data[guild_id]:
-                        await interaction.response.send_message(f"❌ {user.mention} is not quarantined!", ephemeral=True)
+                    if str(user.id) not in quarantined_users:
+                        await interaction.followup.send(f"❌ {user.mention} is not quarantined!", ephemeral=True)
                         return
                     players = [user.id]
                     player_names = [user.display_name]
                 else:
-                    # Get all quarantined users
-                    players = [int(user_id) for user_id in quarantine_data[guild_id].keys()]
+                    # Get all quarantined users (excluding server_settings)
+                    players = [int(user_id) for user_id in quarantined_users.keys()]
                     player_names = []
                     for player_id in players:
                         member = interaction.guild.get_member(player_id)
@@ -529,7 +570,7 @@ async def setup_quarantine_commands(bot):
                             player_names.append(member.display_name)
                             
                 if not players:
-                    await interaction.response.send_message("❌ No valid quarantined players found!", ephemeral=True)
+                    await interaction.followup.send("❌ No valid quarantined players found!", ephemeral=True)
                     return
                     
                 # Create new game session
@@ -548,8 +589,11 @@ async def setup_quarantine_commands(bot):
                 
                 save_prison_break_data(prison_break_data)
                 
+                # Send immediate confirmation
+                await interaction.followup.send(f"🎪 **PRISON BREAK STARTED!** Game ID: {game_id}\nPlayers: {', '.join(player_names)}", ephemeral=True)
+                
                 # Announce the game start
-                jail_cam_channel = discord.utils.get(interaction.guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
+                jail_cam_channel = get_jail_cam_channel(interaction.guild)
                     
                 if jail_cam_channel:
                     embed = discord.Embed(
@@ -558,8 +602,28 @@ async def setup_quarantine_commands(bot):
                         color=0xff4444
                     )
                     embed.add_field(
-                        name="🎮 How to Participate", 
-                        value="• React with help emojis (✨🤝💡🔦🗝️⏰📍🎯🆘) to assist prisoners\n• React with sabotage emojis (😈🚨🔒💥🌩️📢⛔💀🔥) to hinder them\n• Watch the chaos unfold!",
+                        name="🎮 How Spectators Can Participate", 
+                        value=(
+                            "**HELP EMOJIS** (assist prisoners):\n"
+                            "✨ Magic assistance • 🤝 Teamwork boost • 💡 Helpful hints\n"
+                            "🔦 Light the way • 🗝️ Lock picking tools • ⏰ Extra time\n"
+                            "📍 Show directions • 🎯 Tactical advice • 🆘 Emergency help\n\n"
+                            "**SABOTAGE EMOJIS** (hinder prisoners):\n"
+                            "😈 Alert guards • 🚨 Trigger alarms • 🔒 Jam locks\n"
+                            "💥 Create chaos • 🌩️ Cut power • 📢 Make noise\n"
+                            "⛔ Block routes • 💀 Extra security • 🔥 Start fires\n\n"
+                            "**React to messages in this channel to help or hinder!**"
+                        ),
+                        inline=False
+                    )
+                    embed.add_field(
+                        name="🎯 Game Stages", 
+                        value=(
+                            "**Stage 1:** 🔓 Lock Picking - Crack the cell door combination\n"
+                            "**Stage 2:** 🕳️ Tunnel Digging - Navigate underground maze\n"
+                            "**Stage 3:** 👮 Guard Evasion - Sneak past security\n"
+                            "**Stage 4:** 🚗 Great Escape - Coordinate team escape"
+                        ),
                         inline=False
                     )
                     embed.add_field(
@@ -578,34 +642,32 @@ async def setup_quarantine_commands(bot):
                     except Exception as e:
                         print(f"Error adding reactions to prison break announcement: {e}")
                 
-                await interaction.response.send_message(f"🎪 **PRISON BREAK STARTED!** Game ID: {game_id}\nPlayers: {', '.join(player_names)}", ephemeral=True)
-                
                 # Start the first challenge
                 await start_stage_challenge(interaction.guild, game_id, 1)
                 
             elif action == "stop":
                 if guild_id not in prison_break_data or not prison_break_data[guild_id]:
-                    await interaction.response.send_message("❌ No active prison break games!", ephemeral=True)
+                    await interaction.followup.send("❌ No active prison break games!", ephemeral=True)
                     return
                     
                 # Stop all active games
                 stopped_count = 0
                 for game_id in list(prison_break_data[guild_id].keys()):
-                    if prison_break_data[guild_id][game_id].get("active", False):
+                    if game_id != "server_settings" and prison_break_data[guild_id][game_id].get("active", False):
                         prison_break_data[guild_id][game_id]["active"] = False
                         stopped_count += 1
                         
                 save_prison_break_data(prison_break_data)
-                await interaction.response.send_message(f"🛑 Stopped {stopped_count} active prison break game(s)!", ephemeral=True)
+                await interaction.followup.send(f"🛑 Stopped {stopped_count} active prison break game(s)!", ephemeral=True)
                 
             elif action == "status":
                 if guild_id not in prison_break_data or not prison_break_data[guild_id]:
-                    await interaction.response.send_message("❌ No prison break games found!", ephemeral=True)
+                    await interaction.followup.send("❌ No prison break games found!", ephemeral=True)
                     return
                     
                 active_games = []
                 for game_id, game_data in prison_break_data[guild_id].items():
-                    if game_data.get("active", False):
+                    if game_id != "server_settings" and game_data.get("active", False):
                         players = []
                         for player_id in game_data["players"]:
                             member = interaction.guild.get_member(player_id)
@@ -620,7 +682,7 @@ async def setup_quarantine_commands(bot):
                         })
                         
                 if not active_games:
-                    await interaction.response.send_message("📊 No active prison break games!", ephemeral=True)
+                    await interaction.followup.send("📊 No active prison break games!", ephemeral=True)
                     return
                     
                 embed = discord.Embed(title="🎮 Active Prison Break Games", color=0x00ff00)
@@ -630,12 +692,154 @@ async def setup_quarantine_commands(bot):
                         value=f"Players: {', '.join(game['players'])}\nStarted: {game['start_time'][:19]}",
                         inline=False
                     )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+                await interaction.followup.send(embed=embed, ephemeral=True)
                 
+        except Exception as e:
+            await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
+
+    @bot.tree.command(name="setjailcam", description="Set the channel to use for jail-cam (public quarantine viewing)")
+    @app_commands.describe(
+        channel="The channel to use for jail-cam, or None to disable public viewing"
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def set_jail_cam(interaction: discord.Interaction, channel: Optional[discord.TextChannel] = None):
+        try:
+            guild_id = str(interaction.guild.id)
+            
+            # Initialize guild settings if not exists
+            if guild_id not in quarantine_data:
+                quarantine_data[guild_id] = {}
+            
+            # Special key for server settings
+            if "server_settings" not in quarantine_data[guild_id]:
+                quarantine_data[guild_id]["server_settings"] = {}
+            
+            if channel:
+                # Set the jail-cam channel
+                quarantine_data[guild_id]["server_settings"]["jail_cam_channel_id"] = str(channel.id)
+                save_quarantine_data(quarantine_data)
+                
+                embed = discord.Embed(
+                    title="🔧 Jail-Cam Channel Configured",
+                    description=f"Jail-cam messages will now be sent to {channel.mention}",
+                    color=discord.Color.green()
+                )
+                embed.add_field(
+                    name="What this means",
+                    value="• Quarantined users' messages will be mirrored to this channel when public viewing is enabled\n• Spectators can see prison break games here\n• Users can use `/throw` commands here",
+                    inline=False
+                )
+                
+                # Test message
+                try:
+                    await channel.send("📺 **This channel is now configured for jail-cam!** Quarantined users' public messages will appear here.")
+                except:
+                    embed.add_field(
+                        name="⚠️ Warning", 
+                        value="Bot may not have permission to send messages in this channel",
+                        inline=False
+                    )
+                
+            else:
+                # Remove jail-cam channel (disable public viewing)
+                if "jail_cam_channel_id" in quarantine_data[guild_id]["server_settings"]:
+                    del quarantine_data[guild_id]["server_settings"]["jail_cam_channel_id"]
+                    save_quarantine_data(quarantine_data)
+                
+                embed = discord.Embed(
+                    title="🔧 Jail-Cam Disabled",
+                    description="Public jail-cam viewing has been disabled for this server",
+                    color=discord.Color.orange()
+                )
+                embed.add_field(
+                    name="What this means",
+                    value="• Quarantined users' messages will only be visible to moderators\n• No public mirror channel for quarantine activity\n• Prison break games will still work but won't be publicly visible",
+                    inline=False
+                )
+            
+            await interaction.response.send_message(embed=embed)
+            
         except Exception as e:
             await interaction.response.send_message(f"❌ Error: {str(e)}", ephemeral=True)
 
+    @bot.tree.command(name="prisonhelp", description="Get help about the prison break game mechanics")
+    async def prison_help(interaction: discord.Interaction):
+        try:
+            embed = discord.Embed(
+                title="🎮 Prison Break Game Guide",
+                description="Complete guide to the interactive prison escape system!",
+                color=0x00ff88
+            )
+            
+            embed.add_field(
+                name="🔒 For Prisoners (Quarantined Users)",
+                value=(
+                    "**How to Play:**\n"
+                    "• Wait for a moderator to start a game with `/prisonbreak start`\n"
+                    "• Type specific commands in your quarantine channel\n"
+                    "• Complete challenges to reduce your sentence\n"
+                    "• Fail too many times and your sentence extends!\n\n"
+                    "**The 4 Stages:**\n"
+                    "🔓 **Lock Picking:** Type `1-2-3-4` format combinations\n"
+                    "🕳️ **Tunnel Digging:** Type `north`, `south`, `east`, `west`\n"
+                    "👮 **Guard Evasion:** Type hiding spots like `behind tree`\n"
+                    "🚗 **Great Escape:** All players type the secret code word together"
+                ),
+                inline=False
+            )
+            
+            embed.add_field(
+                name="👥 For Spectators (Everyone Else)",
+                value=(
+                    "**How to Help/Hinder:**\n"
+                    "• React with emojis on messages in the jail-cam channel\n"
+                    "• Use `/throw` commands to throw items at prisoners\n"
+                    "• Watch the action unfold in real-time!\n\n"
+                    "**Help Emojis:** ✨🤝💡🔦🗝️⏰📍🎯🆘\n"
+                    "**Sabotage Emojis:** 😈🚨🔒💥🌩️📢⛔💀🔥\n\n"
+                    "**Effects:**\n"
+                    "• More help votes = better success chance for prisoners\n"
+                    "• More sabotage votes = worse success chance for prisoners"
+                ),
+                inline=False
+            )
+            
+            embed.add_field(
+                name="⚙️ For Moderators",
+                value=(
+                    "**Commands:**\n"
+                    "• `/prisonbreak start` - Start a game for all quarantined users\n"
+                    "• `/prisonbreak start @user` - Start a game for specific user\n"
+                    "• `/prisonbreak stop` - Stop all active games\n"
+                    "• `/prisonbreak status` - Check active games\n"
+                    "• `/setjailcam #channel` - Configure jail-cam channel"
+                ),
+                inline=False
+            )
+            
+            embed.set_footer(text="Prison break games are a fun way to interact with quarantined users!")
+            
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            
+        except Exception as e:
+            await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
+
 # Prison Break Game Helper Functions
+
+def get_jail_cam_channel(guild):
+    """Get the configured jail-cam channel for a guild"""
+    guild_id = str(guild.id)
+    
+    # First check if there's a server-configured jail-cam channel
+    if guild_id in quarantine_data and "server_settings" in quarantine_data[guild_id]:
+        jail_cam_channel_id = quarantine_data[guild_id]["server_settings"].get("jail_cam_channel_id")
+        if jail_cam_channel_id:
+            channel = guild.get_channel(int(jail_cam_channel_id))
+            if channel:
+                return channel
+    
+    # Fall back to finding the default jail-cam channel by name
+    return discord.utils.get(guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
 
 async def start_stage_challenge(guild, game_id, stage):
     """Start a challenge for a specific stage"""
@@ -693,7 +897,7 @@ async def start_stage_challenge(guild, game_id, stage):
     save_prison_break_data(prison_break_data)
     
     # Send challenge to jail-cam
-    jail_cam_channel = discord.utils.get(guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
+    jail_cam_channel = get_jail_cam_channel(guild)
     if jail_cam_channel:
         embed = discord.Embed(
             title=f"🎯 {stage_info['name']} - Challenge {stage}",
@@ -704,25 +908,52 @@ async def start_stage_challenge(guild, game_id, stage):
         if stage == 1:
             embed.add_field(
                 name="🔢 Lock Combination Challenge",
-                value="Prisoners must type the 4-digit combination!\nFormat: `1-2-3-4`",
+                value=(
+                    "**PRISONERS:** Type the correct 4-digit combination to unlock your cell!\n\n"
+                    "📝 **Format:** `1-2-3-4` (numbers separated by dashes)\n"
+                    "🎯 **Example:** `3-7-1-9` or `5-2-8-4`\n"
+                    "⚠️ **Warning:** 3 wrong attempts = lock jams and sentence extends!\n"
+                    "💡 **Tip:** Try common patterns or listen for spectator hints!"
+                ),
                 inline=False
             )
         elif stage == 2:
             embed.add_field(
-                name="🗺️ Tunnel Navigation",
-                value="Prisoners must follow the right path!\nDirections: north, south, east, west\nType each direction one at a time!",
+                name="🗺️ Tunnel Navigation Challenge",
+                value=(
+                    "**PRISONERS:** Dig a tunnel by following the correct path!\n\n"
+                    "📝 **Commands:** Type one direction at a time\n"
+                    "🧭 **Directions:** `north`, `south`, `east`, `west`\n"
+                    "🎯 **Goal:** Follow the secret path to reach the other side\n"
+                    "⚠️ **Warning:** 4 wrong directions = tunnel collapses!\n"
+                    "💡 **Tip:** Each correct direction shows your progress!"
+                ),
                 inline=False
             )
         elif stage == 3:
             embed.add_field(
                 name="👮 Stealth Challenge", 
-                value=f"Avoid {game_data['current_challenge']['guards']} guards!\nFind the safe hiding spot!\nOptions: behind tree, under truck, in shadows, behind dumpster, in alcove",
+                value=(
+                    f"**PRISONERS:** Hide from {game_data['current_challenge']['guards']} guards patrolling the yard!\n\n"
+                    "📝 **Commands:** Type where you want to hide\n"
+                    "🏠 **Options:** `behind tree`, `under truck`, `in shadows`, `behind dumpster`, `in alcove`\n"
+                    "🎯 **Goal:** Find the one safe hiding spot the guards can't see\n"
+                    "⚠️ **Warning:** 4 spotted attempts = full alert and sentence extends!\n"
+                    "💡 **Tip:** Think like a guard - where would YOU look first?"
+                ),
                 inline=False
             )
         elif stage == 4:
             embed.add_field(
                 name="🤝 Teamwork Challenge",
-                value="All prisoners must coordinate!\nType the secret code word at the same time!\nHint: It's related to your goal...",
+                value=(
+                    "**PRISONERS:** All prisoners must coordinate for the final escape!\n\n"
+                    "📝 **Command:** ALL players type the same secret code word\n"
+                    "🎯 **Goal:** Everyone must say the code word at the same time\n"
+                    "💭 **Hint:** Think about what you're trying to achieve...\n"
+                    "⚠️ **Warning:** 5 wrong codes = authorities get suspicious!\n"
+                    "💡 **Tip:** Communicate! The code is related to your goal!"
+                ),
                 inline=False
             )
             
@@ -733,7 +964,7 @@ async def start_stage_challenge(guild, game_id, stage):
         )
         embed.add_field(
             name="🎭 Spectator Actions",
-            value="Use `/help` or `/sabotage` to influence the outcome!",
+            value="React with help/sabotage emojis on messages to influence the outcome!",
             inline=True
         )
         
@@ -828,7 +1059,7 @@ async def handle_prison_break_attempt(message, guild_id, game_id, game_data, cur
         challenge_type = current_challenge["type"]
         
         # Get jail-cam channel for announcements
-        jail_cam_channel = discord.utils.get(message.guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
+        jail_cam_channel = get_jail_cam_channel(message.guild)
         
         success = False
         

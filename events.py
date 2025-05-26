@@ -97,14 +97,22 @@ def setup_events(bot):
             
             # Only mirror if public_view is True
             if user_data.get("public_view", False):
-                # Get the jail-cam channel ID from user data
+                # Get the jail-cam channel ID from user data or server settings
                 jail_cam_channel_id = user_data.get("jail_cam_channel_id")
                 
-                # If no specific channel is set, try to find the default one
+                # If no specific channel is set for this user, check server settings
+                if not jail_cam_channel_id and "server_settings" in quarantine_data[guild_id]:
+                    jail_cam_channel_id = quarantine_data[guild_id]["server_settings"].get("jail_cam_channel_id")
+                
+                # If still no channel, try to find the default one
                 if not jail_cam_channel_id:
                     jail_cam_channel = discord.utils.get(message.guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
-                else:
-                    # Get the channel by ID
+                    if jail_cam_channel:
+                        jail_cam_channel_id = str(jail_cam_channel.id)
+                
+                # Get the actual channel object
+                jail_cam_channel = None
+                if jail_cam_channel_id:
                     jail_cam_channel = message.guild.get_channel(int(jail_cam_channel_id))
                 
                 if jail_cam_channel:
@@ -137,42 +145,56 @@ def setup_events(bot):
             # This is a message sent in jail-cam by a normal user, forward it to quarantined users
             # Only process if there are actually quarantined users in this guild
             if guild_id in quarantine_data and quarantine_data[guild_id]:
-                content = message.content if message.content else "(No message content)"
+                # Check if this channel is configured as the jail-cam channel
+                is_jail_cam_channel = False
                 
-                # Add info about attachments if any
-                attachments_text = ""
-                if message.attachments:
-                    attachment_list = ", ".join([attachment.filename for attachment in message.attachments])
-                    attachments_text = f" [Attached: {attachment_list}]"
+                # Check if this is the server-configured jail-cam channel
+                if "server_settings" in quarantine_data[guild_id]:
+                    configured_jail_cam_id = quarantine_data[guild_id]["server_settings"].get("jail_cam_channel_id")
+                    if configured_jail_cam_id and message.channel.id == int(configured_jail_cam_id):
+                        is_jail_cam_channel = True
                 
-                # Create message to send to quarantined users
-                jail_cam_message = f"📺 **{message.author.display_name}** from jail-cam says: {content}{attachments_text}"
+                # If not configured channel, check if it's the default jail-cam channel
+                if not is_jail_cam_channel and message.channel.name == JAIL_CAM_CHANNEL_NAME:
+                    is_jail_cam_channel = True
                 
-                # Find all quarantined users in this guild and send message to their quarantine channels
-                quarantined_users = quarantine_data[guild_id]
-                messages_sent = 0
-                
-                for user_id, user_data in quarantined_users.items():
-                    if user_data.get("public_view", False):  # Only if public viewing is enabled
-                        quarantine_channel_id = user_data.get("channel_id")
-                        if quarantine_channel_id:
-                            quarantine_channel = message.guild.get_channel(int(quarantine_channel_id))
-                            if quarantine_channel:
-                                try:
-                                    await quarantine_channel.send(jail_cam_message)
-                                    messages_sent += 1
-                                except Exception as e:
-                                    print(f"Failed to forward jail-cam message to quarantine channel: {e}")
-                
-                if messages_sent > 0:
-                    print(f"Successfully forwarded jail-cam message from {message.author.name} to {messages_sent} quarantine channel(s)")
-                    # Add a reaction to show the message was forwarded
-                    try:
-                        await message.add_reaction("📨")  # Envelope emoji to show it was delivered
-                    except:
-                        pass
-                else:
-                    print(f"No active quarantined users to forward jail-cam message to")
+                if is_jail_cam_channel:
+                    content = message.content if message.content else "(No message content)"
+                    
+                    # Add info about attachments if any
+                    attachments_text = ""
+                    if message.attachments:
+                        attachment_list = ", ".join([attachment.filename for attachment in message.attachments])
+                        attachments_text = f" [Attached: {attachment_list}]"
+                    
+                    # Create message to send to quarantined users
+                    jail_cam_message = f"📺 **{message.author.display_name}** from jail-cam says: {content}{attachments_text}"
+                    
+                    # Find all quarantined users in this guild and send message to their quarantine channels
+                    quarantined_users = quarantine_data[guild_id]
+                    messages_sent = 0
+                    
+                    for user_id, user_data in quarantined_users.items():
+                        if user_data.get("public_view", False):  # Only if public viewing is enabled
+                            quarantine_channel_id = user_data.get("channel_id")
+                            if quarantine_channel_id:
+                                quarantine_channel = message.guild.get_channel(int(quarantine_channel_id))
+                                if quarantine_channel:
+                                    try:
+                                        await quarantine_channel.send(jail_cam_message)
+                                        messages_sent += 1
+                                    except Exception as e:
+                                        print(f"Failed to forward jail-cam message to quarantine channel: {e}")
+                    
+                    if messages_sent > 0:
+                        print(f"Successfully forwarded jail-cam message from {message.author.name} to {messages_sent} quarantine channel(s)")
+                        # Add a reaction to show the message was forwarded
+                        try:
+                            await message.add_reaction("📨")  # Envelope emoji to show it was delivered
+                        except:
+                            pass
+                    else:
+                        print(f"No active quarantined users to forward jail-cam message to")
             # If no quarantined users, silently ignore the message (don't forward anything)
 
         # Process commands AFTER checking quarantine status
@@ -715,15 +737,20 @@ async def check_quarantine_expirations():
                 
             users_to_unquarantine = []
             
-            # Find users whose quarantine has expired
+            # Find users whose quarantine has expired (filter out server_settings)
             for user_id, data in quarantine_data[guild_id].items():
+                # Skip server settings - only process actual user quarantine records
+                if user_id == "server_settings":
+                    continue
+                    
                 if "end_time" in data:
                     try:
                         end_time = datetime.datetime.fromisoformat(data["end_time"].replace('Z', '+00:00'))
                         if current_time >= end_time:
                             users_to_unquarantine.append(user_id)
+                            print(f"Quarantine expired for user {user_id} in guild {guild.name}")
                     except Exception as e:
-                        print(f"Error parsing end time: {e}")
+                        print(f"Error parsing end time for user {user_id}: {e}")
             
             # Unquarantine expired users
             for user_id in users_to_unquarantine:
@@ -732,6 +759,8 @@ async def check_quarantine_expirations():
                     member = await guild.fetch_member(int(user_id))
                     user_data = quarantine_data[guild_id][user_id]
                     saved_roles = user_data.get("roles", [])
+                    
+                    print(f"Auto-unquarantining {member.display_name} in {guild.name}")
                     
                     # Reset channel permissions
                     for channel in guild.channels:

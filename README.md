@@ -156,6 +156,7 @@ Orion/
 - `/quarantine` - Place user in quarantine with optional timer
 - `/unquarantine` - Release user from quarantine
 - `/quarantinelist` - List quarantined users
+- `/setjailcam` - Configure which channel to use for jail-cam (public viewing)
 - `/throw` - Throw items at quarantined users (fun interaction)
 - `/freshaccounts` - Configure new account detection
 
@@ -171,6 +172,7 @@ Orion/
 - **Timed Quarantine**: Auto-release after specified time
 - **Role Preservation**: Automatically restores roles on release
 - **Fresh Account Detection**: Auto-quarantine new Discord accounts
+- **Configurable Jail-Cam**: Use `/setjailcam` to set any channel for public viewing
 
 ### **🎮 Interactive Prison Break Games**
 - **4-Stage Challenges**: Lock picking → Tunnel digging → Guard evasion → Great escape
@@ -371,3 +373,12 @@ Your Orion bot is now running on a **modern, modular architecture** with:
 - ✅ **Future-ready** - Scalable for new features
 
 **Start the bot with `python main.py` and enjoy! 🚀**
+
+### **⚙️ Jail-Cam Configuration**
+```bash
+/setjailcam #your-channel    # Set a specific channel for jail-cam
+/setjailcam                  # Disable public jail-cam viewing
+```
+- **Default**: Bot looks for or creates `#jail-cam` channel
+- **Custom**: Admins can use any channel with `/setjailcam`
+- **Disable**: Use `/setjailcam` without a channel to disable public viewing
