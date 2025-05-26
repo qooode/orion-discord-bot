@@ -23,5 +23,5 @@ FEATURES = {
     "moderation": ["kick", "ban", "mute", "warn", "lockdown", "unlock", "slowmode", "warnings", "clearwarnings", "userinfo", "serverlock", "serverunlock", "antiraid"],
     "utility": ["userinfo", "serverinfo", "notes", "deletenote"],
     "mass_moderation": ["purgewords", "massban", "masskick", "clean", "idcheck"],
-    "quarantine": ["quarantine", "unquarantine", "quarantinelist", "setjailcam", "throw", "freshaccounts", "prisonbreak", "prisonhelp"],
+    "quarantine": ["quarantine", "unquarantine", "quarantinelist", "setjailcam", "throw", "freshaccounts", "prisonbreak", "prisonhelp", "quarantinedebug"],
 } 

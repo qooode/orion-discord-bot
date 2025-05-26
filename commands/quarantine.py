@@ -58,11 +58,7 @@ async def setup_quarantine_commands(bot):
                         if configured_channel:
                             jail_cam_channel_id = server_jail_cam_id
                 
-                # Second priority: If a specific jail-cam channel was provided as parameter, use it
-                if not jail_cam_channel_id and jail_cam_channel:
-                    jail_cam_channel_id = str(jail_cam_channel.id)
-                
-                # Third priority: Find or create the default jail-cam channel
+                # Find or create the default jail-cam channel if no configured channel exists
                 if not jail_cam_channel_id:
                     # Try to find existing default jail-cam channel
                     default_jail_cam = discord.utils.get(interaction.guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
@@ -322,20 +318,24 @@ async def setup_quarantine_commands(bot):
         try:
             guild_id = str(interaction.guild.id)
             
-            # Check if there are any quarantined users
-            if guild_id not in quarantine_data or not quarantine_data[guild_id]:
+            # Check if there are any quarantined users (filter out server_settings)
+            quarantined_users = {}
+            if guild_id in quarantine_data:
+                quarantined_users = {k: v for k, v in quarantine_data[guild_id].items() if k != "server_settings"}
+            
+            if not quarantined_users:
                 await interaction.response.send_message("There are no users currently in quarantine.", ephemeral=True)
                 return
                 
             # Create embed
             embed = discord.Embed(
                 title="Quarantined Users",
-                description=f"There are {len(quarantine_data[guild_id])} users in quarantine.",
+                description=f"There are {len(quarantined_users)} users in quarantine.",
                 color=discord.Color.orange()
             )
             
-            # Add each user
-            for user_id, data in quarantine_data[guild_id].items():
+            # Add each user (excluding server_settings)
+            for user_id, data in quarantined_users.items():
                 try:
                     user = await interaction.guild.fetch_member(int(user_id))
                     user_mention = user.mention
@@ -381,24 +381,28 @@ async def setup_quarantine_commands(bot):
             # Get guild and data
             guild_id = str(interaction.guild.id)
             
-            # Check if there are quarantined users
-            if guild_id not in quarantine_data or not quarantine_data[guild_id]:
+            # Check if there are quarantined users (filter out server_settings)
+            quarantined_users = {}
+            if guild_id in quarantine_data:
+                quarantined_users = {k: v for k, v in quarantine_data[guild_id].items() if k != "server_settings"}
+            
+            if not quarantined_users:
                 await interaction.response.send_message("There's nobody in quarantine to throw things at!", ephemeral=True)
                 return
                 
             # If user specified, check if they're in quarantine
             if user:
-                if str(user.id) not in quarantine_data[guild_id]:
+                if str(user.id) not in quarantined_users:
                     await interaction.response.send_message(f"{user.mention} is not in quarantine!", ephemeral=True)
                     return
                 target_user = user
-                quarantine_channel_id = quarantine_data[guild_id][str(user.id)].get("channel_id")
+                quarantine_channel_id = quarantined_users[str(user.id)].get("channel_id")
             else:
-                # Pick a random quarantined user
-                quarantined_user_id = random.choice(list(quarantine_data[guild_id].keys()))
+                # Pick a random quarantined user (excluding server_settings)
+                quarantined_user_id = random.choice(list(quarantined_users.keys()))
                 try:
                     target_user = await interaction.guild.fetch_member(int(quarantined_user_id))
-                    quarantine_channel_id = quarantine_data[guild_id][quarantined_user_id].get("channel_id")
+                    quarantine_channel_id = quarantined_users[quarantined_user_id].get("channel_id")
                 except:
                     await interaction.response.send_message("Couldn't find a valid quarantined user.", ephemeral=True)
                     return
@@ -823,6 +827,78 @@ async def setup_quarantine_commands(bot):
             
         except Exception as e:
             await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
+
+    @bot.tree.command(name="quarantinedebug", description="Debug quarantine timers and check expiration system")
+    @app_commands.default_permissions(administrator=True)
+    async def quarantine_debug(interaction: discord.Interaction):
+        try:
+            guild_id = str(interaction.guild.id)
+            current_time = datetime.datetime.now(UTC)
+            
+            embed = discord.Embed(
+                title="🔧 Quarantine Timer Debug",
+                description=f"Current time: {current_time.strftime('%Y-%m-%d %H:%M:%S')} UTC",
+                color=discord.Color.blue()
+            )
+            
+            # Check if guild has quarantine data
+            if guild_id not in quarantine_data:
+                embed.add_field(name="Status", value="❌ No quarantine data for this guild", inline=False)
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+                return
+            
+            # Count quarantined users (excluding server_settings)
+            quarantined_users = {k: v for k, v in quarantine_data[guild_id].items() if k != "server_settings"}
+            embed.add_field(name="Total Quarantined", value=str(len(quarantined_users)), inline=True)
+            
+            # Check users with timers
+            timed_users = 0
+            expired_users = 0
+            
+            for user_id, data in quarantined_users.items():
+                if "end_time" in data:
+                    timed_users += 1
+                    try:
+                        end_time = datetime.datetime.fromisoformat(data["end_time"].replace('Z', '+00:00'))
+                        if current_time >= end_time:
+                            expired_users += 1
+                    except:
+                        pass
+            
+            embed.add_field(name="With Timers", value=str(timed_users), inline=True)
+            embed.add_field(name="Should be Released", value=str(expired_users), inline=True)
+            
+            # Show individual timer info
+            if timed_users > 0:
+                timer_info = ""
+                for user_id, data in quarantined_users.items():
+                    if "end_time" in data:
+                        try:
+                            end_time = datetime.datetime.fromisoformat(data["end_time"].replace('Z', '+00:00'))
+                            time_remaining = end_time - current_time
+                            status = "🔴 EXPIRED" if time_remaining.total_seconds() <= 0 else f"⏰ {int(time_remaining.total_seconds())}s left"
+                            
+                            member = interaction.guild.get_member(int(user_id))
+                            username = member.display_name if member else f"User {user_id}"
+                            
+                            timer_info += f"**{username}:** {status}\n"
+                        except Exception as e:
+                            timer_info += f"**User {user_id}:** ❌ Error parsing time\n"
+                
+                if len(timer_info) > 1024:
+                    timer_info = timer_info[:1020] + "..."
+                    
+                embed.add_field(name="Timer Details", value=timer_info or "No timer info available", inline=False)
+            
+            # Check if expiration task is running
+            from events import check_quarantine_expirations
+            task_status = "✅ Running" if check_quarantine_expirations.is_running() else "❌ Not Running"
+            embed.add_field(name="Expiration Task Status", value=task_status, inline=False)
+            
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            
+        except Exception as e:
+            await interaction.response.send_message(f"Debug error: {str(e)}", ephemeral=True)
 
 # Prison Break Game Helper Functions
 
