@@ -319,61 +319,65 @@ async def check_scheduled_tasks():
             await asyncio.sleep(60)  # Check every minute
             current_time = datetime.datetime.now(UTC)
             tasks_to_remove = []
-        
-        for i, task in enumerate(scheduled_tasks_data):
-            try:
-                execute_time = datetime.datetime.fromisoformat(task["time"])
-                if current_time >= execute_time:
-                    # Time to execute this task
-                    guild_id = int(task["guild_id"])
-                    guild = bot.get_guild(guild_id)
-                    
-                    if guild:
-                        action_type = task["action"]
+            
+            for i, task in enumerate(scheduled_tasks_data):
+                try:
+                    execute_time = datetime.datetime.fromisoformat(task["time"])
+                    if current_time >= execute_time:
+                        # Time to execute this task
+                        guild_id = int(task["guild_id"])
+                        guild = bot.get_guild(guild_id)
                         
-                        if action_type == "unban":
-                            user_id = int(task["user_id"])
-                            reason = task.get("reason", "Scheduled unban")
-                            try:
-                                await guild.unban(discord.Object(id=user_id), reason=reason)
-                                print(f"Scheduled unban for user {user_id} in {guild.name}")
-                            except:
-                                print(f"Failed scheduled unban for user {user_id} in {guild.name}")
-                                
-                        elif action_type == "unmute":
-                            user_id = int(task["user_id"])
-                            reason = task.get("reason", "Scheduled unmute")
-                            try:
-                                member = guild.get_member(user_id)
-                                if member:
-                                    await member.timeout(None, reason=reason)
-                                    print(f"Scheduled unmute for user {member.display_name} in {guild.name}")
-                            except:
-                                print(f"Failed scheduled unmute for user {user_id} in {guild.name}")
-                                
-                        elif action_type == "reminder":
-                            channel_id = int(task["channel_id"])
-                            message = task["message"]
-                            channel = guild.get_channel(channel_id)
-                            if channel:
+                        if guild:
+                            action_type = task["action"]
+                            
+                            if action_type == "unban":
+                                user_id = int(task["user_id"])
+                                reason = task.get("reason", "Scheduled unban")
                                 try:
-                                    await channel.send(f"⏰ **Scheduled Reminder:** {message}")
-                                    print(f"Sent reminder in {channel.name}")
+                                    await guild.unban(discord.Object(id=user_id), reason=reason)
+                                    print(f"Scheduled unban for user {user_id} in {guild.name}")
                                 except:
-                                    print(f"Failed to send reminder in channel {channel_id}")
-                    
-                    # Mark task for removal
+                                    print(f"Failed scheduled unban for user {user_id} in {guild.name}")
+                                    
+                            elif action_type == "unmute":
+                                user_id = int(task["user_id"])
+                                reason = task.get("reason", "Scheduled unmute")
+                                try:
+                                    member = guild.get_member(user_id)
+                                    if member:
+                                        await member.timeout(None, reason=reason)
+                                        print(f"Scheduled unmute for user {member.display_name} in {guild.name}")
+                                except:
+                                    print(f"Failed scheduled unmute for user {user_id} in {guild.name}")
+                                    
+                            elif action_type == "reminder":
+                                channel_id = int(task["channel_id"])
+                                message = task["message"]
+                                channel = guild.get_channel(channel_id)
+                                if channel:
+                                    try:
+                                        await channel.send(f"⏰ **Scheduled Reminder:** {message}")
+                                        print(f"Sent reminder in {channel.name}")
+                                    except:
+                                        print(f"Failed to send reminder in channel {channel_id}")
+                        
+                        # Mark task for removal
+                        tasks_to_remove.append(i)
+                except Exception as e:
+                    print(f"Error processing scheduled task: {e}")
                     tasks_to_remove.append(i)
-            except Exception as e:
-                print(f"Error processing scheduled task: {e}")
-                tasks_to_remove.append(i)
-        
-        # Remove completed tasks (in reverse order to avoid index issues)
-        for index in sorted(tasks_to_remove, reverse=True):
-            scheduled_tasks_data.pop(index)
-        
-        if tasks_to_remove:
-            save_scheduled_tasks(scheduled_tasks_data)
+                    
+            # Remove completed tasks (in reverse order to avoid index issues)
+            for index in sorted(tasks_to_remove, reverse=True):
+                scheduled_tasks_data.pop(index)
+            
+            if tasks_to_remove:
+                save_scheduled_tasks(scheduled_tasks_data)
+                
+        except Exception as e:
+            print(f"Error in scheduled tasks checker: {e}")
+            await asyncio.sleep(60)  # Wait a minute before retrying if there's an error
 
 # Voice state update event for temporary voice channels
 @bot.event
