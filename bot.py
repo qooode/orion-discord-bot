@@ -5,6 +5,7 @@ import datetime
 import asyncio
 import re
 import sys
+import random
 from typing import Optional, List, Union
 from discord import app_commands
 from discord.ext import commands, tasks
@@ -486,7 +487,8 @@ async def on_message(message):
         user_data = quarantine_data[guild_id][user_id]
         
         # Check if this is a quarantine channel and public viewing is enabled
-        if str(message.channel.id) == user_data.get("channel_id") and user_data.get("public_view", False):
+        # Note: We're removing the public_view check to ensure messages always display
+        if str(message.channel.id) == user_data.get("channel_id"):
             # Mirror message to jail-cam channel
             jail_cam_channel = discord.utils.get(message.guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
             
@@ -496,7 +498,7 @@ async def on_message(message):
                 
                 # Create a nice embed for the mirrored message
                 embed = discord.Embed(
-                    description=content,
+                    description=content if content else "(No message content)",
                     color=discord.Color.dark_gray(),
                     timestamp=message.created_at
                 )
@@ -504,10 +506,19 @@ async def on_message(message):
                 
                 # Include any attachments
                 if message.attachments:
-                    embed.add_field(name="Attachments", value=f"{len(message.attachments)} attachment(s) not shown")
+                    attachment_urls = "\n".join([f"[{attachment.filename}]({attachment.url})" for attachment in message.attachments])
+                    embed.add_field(name="Attachments", value=attachment_urls)
                 
-                # Send to jail-cam
-                await jail_cam_channel.send(embed=embed)
+                # Send to jail-cam - use await and make sure this doesn't fail silently
+                try:
+                    await jail_cam_channel.send(embed=embed)
+                    print(f"Mirrored message from {message.author.name} to jail-cam")
+                except Exception as e:
+                    print(f"Failed to mirror message to jail-cam: {e}")
+                    
+                # For debugging: log to console
+                print(f"Quarantined user {message.author.name} said: {content}")
+
     
     # Auto-moderate content (from earlier code)
     content = message.content.lower()
@@ -3963,6 +3974,30 @@ async def check_quarantine_expirations():
                         embed.add_field(name="User", value=f"<@{user_id}> ({user_id})", inline=True)
                         embed.set_footer(text="Automatic timed release")
                         await log_channel.send(embed=embed)
+                    
+                    # Also announce it in the jail-cam channel
+                    jail_cam_channel = discord.utils.get(guild.text_channels, name=JAIL_CAM_CHANNEL_NAME)
+                    if jail_cam_channel:
+                        freedom_messages = [
+                            f"🔓 **FREEDOM!** {member.mention} has served their time and been released!",
+                            f"🕊️ {member.mention} has been set free! Their sentence is complete.",
+                            f"⏱️ Time's up! {member.mention} has been released from quarantine.",
+                            f"🎉 Congratulations {member.mention}! You're free to go!",
+                            f"🚪 The cell door opens... {member.mention} walks free once more!"
+                        ]
+                        freedom_message = random.choice(freedom_messages)
+                        
+                        # Create a fancy embed for the jail-cam
+                        embed = discord.Embed(
+                            title="Prisoner Released",
+                            description=freedom_message,
+                            color=discord.Color.green(),
+                            timestamp=current_time
+                        )
+                        embed.set_thumbnail(url=member.display_avatar.url)
+                        embed.set_footer(text="They've done their time! Back to normal server access.")
+                        
+                        await jail_cam_channel.send(embed=embed)
                         
                 except Exception as e:
                     print(f"Error auto-unquarantining user {user_id}: {e}")
