@@ -87,7 +87,16 @@ class CollectionView(discord.ui.View):
             self.current_index -= 1
             self.update_buttons()
             embed = self.create_card_embed(self.current_index)
-            await interaction.response.edit_message(embed=embed, view=self)
+            
+            # Check if current card needs a file
+            current_card = self.cards[self.current_index]
+            data_embed, image_embed, discord_file = self.trading_cards.create_card_embeds(current_card, "showcase")
+            
+            if discord_file:
+                # Need to send new message with file, can't edit with file
+                await interaction.response.send_message("Navigation with local images requires a new message...", ephemeral=True)
+            else:
+                await interaction.response.edit_message(embed=embed, view=self)
         else:
             await interaction.response.defer()
     
@@ -127,50 +136,18 @@ class CollectionView(discord.ui.View):
             self.current_index += 1
             self.update_buttons()
             embed = self.create_card_embed(self.current_index)
-            await interaction.response.edit_message(embed=embed, view=self)
+            
+            # Check if current card needs a file
+            current_card = self.cards[self.current_index]
+            data_embed, image_embed, discord_file = self.trading_cards.create_card_embeds(current_card, "showcase")
+            
+            if discord_file:
+                # Need to send new message with file, can't edit with file
+                await interaction.response.send_message("Navigation with local images requires a new message...", ephemeral=True)
+            else:
+                await interaction.response.edit_message(embed=embed, view=self)
         else:
             await interaction.response.defer()
-    
-    @discord.ui.button(label='🖼️ View Image', style=discord.ButtonStyle.success, emoji='🖼️')
-    async def image_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user != self.user:
-            await interaction.response.send_message("❌ This is not your collection!", ephemeral=True)
-            return
-            
-        # Show full card with image using the new single embed system
-        card = self.cards[self.current_index]
-        card_id = card[0]
-        
-        # Get full card data for the image display
-        self.trading_cards.cursor.execute("SELECT * FROM cards WHERE id = ?", (card_id,))
-        full_card = self.trading_cards.cursor.fetchone()
-        
-        if full_card:
-            data_embed, image_embed, discord_file = self.trading_cards.create_card_embeds(full_card, "showcase")
-            
-            # Send the beautiful single embed
-            if image_embed:
-                if discord_file:
-                    await interaction.response.send_message(embed=image_embed, file=discord_file, ephemeral=True)
-                else:
-                    await interaction.response.send_message(embed=image_embed, ephemeral=True)
-            else:
-                await interaction.response.send_message(f"ℹ️ **{card[1]}** - No image available for this card.", ephemeral=True)
-        else:
-            await interaction.response.send_message("❌ Card not found!", ephemeral=True)
-    
-    @discord.ui.button(label='🎲 Random', style=discord.ButtonStyle.success, emoji='🎲')
-    async def random_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user != self.user:
-            await interaction.response.send_message("❌ This is not your collection!", ephemeral=True)
-            return
-            
-        # Jump to random card
-        import random
-        self.current_index = random.randint(0, len(self.cards) - 1)
-        self.update_buttons()
-        embed = self.create_card_embed(self.current_index)
-        await interaction.response.edit_message(embed=embed, view=self)
     
     @discord.ui.button(label='📝 Text List', style=discord.ButtonStyle.secondary, emoji='📝')
     async def text_list_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -530,7 +507,14 @@ class TradingCards(commands.Cog):
         view = CollectionView(target_user, cards, self)
         embed = view.create_card_embed(0)  # Start with first card
         
-        await ctx.send(embed=embed, view=view)
+        # Check if we need to send a file for the first card
+        first_card = cards[0]
+        data_embed, image_embed, discord_file = self.create_card_embeds(first_card, "showcase")
+        
+        if discord_file:
+            await ctx.send(embed=embed, view=view, file=discord_file)
+        else:
+            await ctx.send(embed=embed, view=view)
 
     @card_group.command(name='trade')
     async def trade_card(self, ctx, user: discord.Member, your_card: str, their_card: str):
