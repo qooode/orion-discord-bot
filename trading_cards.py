@@ -46,13 +46,8 @@ class CollectionView(discord.ui.View):
         # Since we now only have image_embed, work with that
         if image_embed:
             # Keep the card name as title (like !card info)
-            # Add collection context in footer only
-            current_footer = image_embed.footer.text if image_embed.footer else ""
-            collection_footer = f"Card {index + 1} of {len(self.cards)} • {self.user.display_name}'s Collection"
-            if current_footer:
-                image_embed.set_footer(text=f"{current_footer} • {collection_footer}")
-            else:
-                image_embed.set_footer(text=collection_footer)
+            # Keep original footer without collection info
+            # The collection context will be added as a separate message above the embed
             image_embed.timestamp = datetime.now()
             
             return image_embed
@@ -63,7 +58,6 @@ class CollectionView(discord.ui.View):
                 description=f"{self.trading_cards.get_rarity_emoji(card[3])} **{card[3]}**\n\n*No image available*",
                 color=self.trading_cards.get_rarity_color(card[3])
             )
-            fallback_embed.set_footer(text=f"Card {index + 1} of {len(self.cards)} • {self.user.display_name}'s Collection")
             fallback_embed.timestamp = datetime.now()
             return fallback_embed
     
@@ -122,7 +116,7 @@ class CollectionView(discord.ui.View):
         
         embed.add_field(name="👥 Total Collectors", value=str(total_collectors), inline=True)
         embed.add_field(name="🔢 You Own", value=f"x{card[6]}", inline=True)
-        embed.add_field(name="🎯 Collection", value=f"{self.current_index + 1}/{len(self.cards)}", inline=True)
+        embed.add_field(name="🎯 Position", value=f"Card {self.current_index + 1} of {len(self.cards)}", inline=True)
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
     
@@ -506,6 +500,11 @@ class TradingCards(commands.Cog):
         # Create interactive collection view
         view = CollectionView(target_user, cards, self)
         embed = view.create_card_embed(0)  # Start with first card
+        
+        # Send collection info as separate message first
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        collection_msg = f"**🃏 {target_user.display_name}'s Collection** • {timestamp}"
+        await ctx.send(collection_msg)
         
         # Check if we need to send a file for the first card
         first_card = cards[0]
