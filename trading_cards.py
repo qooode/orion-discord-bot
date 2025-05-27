@@ -34,30 +34,38 @@ class CollectionView(discord.ui.View):
         self.info_button.label = f"Card {self.current_index + 1}/{len(self.cards)}"
     
     def create_card_embed(self, index):
-        """Create beautiful embed for current card"""
+        """Create beautiful embed for current card - same as !card info"""
         if index >= len(self.cards):
             index = 0
         
         card = self.cards[index]
         
-        # Use the main card embed creation for consistency
-        data_embed, image_embed, discord_file = self.trading_cards.create_card_embeds(card, "collection")
+        # Use showcase context to match !card info appearance
+        data_embed, image_embed, discord_file = self.trading_cards.create_card_embeds(card, "showcase")
         
-        # Update the title for collection context
-        data_embed.title = f"🃏 {self.user.display_name}'s Collection - {card[1]}"
-        
-        # Update footer for collection navigation
-        data_embed.set_footer(text=f"Card {index + 1} of {len(self.cards)} in collection")
-        data_embed.timestamp = datetime.now()
-        
-        # For collection view, we'll combine data and image info into one embed
-        # and use the View Image button for separate image display
-        if image_embed and not discord_file:  # URL images only
-            data_embed.set_image(url=image_embed.image.url if image_embed.image else None)
-        elif image_embed or discord_file:  # Has image (local or URL)
-            data_embed.add_field(name="🖼️ Has Image", value="Click 'View Image' button", inline=True)
-        
-        return data_embed
+        # Since we now only have image_embed, work with that
+        if image_embed:
+            # Keep the card name as title (like !card info)
+            # Add collection context in footer only
+            current_footer = image_embed.footer.text if image_embed.footer else ""
+            collection_footer = f"Card {index + 1} of {len(self.cards)} • {self.user.display_name}'s Collection"
+            if current_footer:
+                image_embed.set_footer(text=f"{current_footer} • {collection_footer}")
+            else:
+                image_embed.set_footer(text=collection_footer)
+            image_embed.timestamp = datetime.now()
+            
+            return image_embed
+        else:
+            # Fallback embed if no image
+            fallback_embed = discord.Embed(
+                title=card[1],  # Just card name like !card info
+                description=f"{self.trading_cards.get_rarity_emoji(card[3])} **{card[3]}**\n\n*No image available*",
+                color=self.trading_cards.get_rarity_color(card[3])
+            )
+            fallback_embed.set_footer(text=f"Card {index + 1} of {len(self.cards)} • {self.user.display_name}'s Collection")
+            fallback_embed.timestamp = datetime.now()
+            return fallback_embed
     
     def get_rarity_rate(self, rarity):
         """Get drop rate for rarity"""
@@ -163,6 +171,47 @@ class CollectionView(discord.ui.View):
         self.update_buttons()
         embed = self.create_card_embed(self.current_index)
         await interaction.response.edit_message(embed=embed, view=self)
+    
+    @discord.ui.button(label='📝 Text List', style=discord.ButtonStyle.secondary, emoji='📝')
+    async def text_list_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.user:
+            await interaction.response.send_message("❌ This is not your collection!", ephemeral=True)
+            return
+        
+        # Create text list of all cards
+        embed = discord.Embed(
+            title=f"📝 {self.user.display_name}'s Card Collection",
+            color=0x7289da
+        )
+        
+        # Group cards by rarity
+        rarity_groups = {
+            'Legendary': [],
+            'Rare': [],
+            'Uncommon': [],
+            'Common': []
+        }
+        
+        for card in self.cards:
+            name, rarity = card[1], card[3]
+            count = card[6] if len(card) > 6 else 1
+            count_text = f" x{count}" if count > 1 else ""
+            rarity_groups[rarity].append(f"• {name}{count_text}")
+        
+        # Add each rarity section
+        for rarity in ['Legendary', 'Rare', 'Uncommon', 'Common']:
+            if rarity_groups[rarity]:
+                emoji = self.trading_cards.get_rarity_emoji(rarity)
+                card_list = "\n".join(rarity_groups[rarity])
+                embed.add_field(
+                    name=f"{emoji} {rarity} ({len(rarity_groups[rarity])})",
+                    value=card_list,
+                    inline=False
+                )
+        
+        embed.set_footer(text=f"Total: {len(self.cards)} unique cards")
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
     
     async def on_timeout(self):
         """Disable all buttons when view times out"""
@@ -874,6 +923,9 @@ class TradingCards(commands.Cog):
                         else:
                             message = await channel.send(embed=image_embed)
                         
+                        # Send separate claim instruction
+                        await channel.send("⚡ **React 🃏 to claim!**")
+                        
                         await message.add_reaction('🃏')
                         
                         def check(reaction, user):
@@ -1033,19 +1085,17 @@ class TradingCards(commands.Cog):
                 # Add rarity and drop rate together
                 footer_parts.append(f"📊 {rarity} {rarity_rates.get(rarity, 'Unknown')}")
             
-            footer_parts.append(f"🆔 ID: #{card_id}")
+            # Only add ID for non-info contexts
+            if context_type not in ["showcase", "info"]:
+                footer_parts.append(f"🆔 ID: #{card_id}")
             
             # Create description with rarity and context messages
             card_description = f"{self.get_rarity_emoji(rarity)} **{rarity}**"
             if description:
                 card_description += f"\n\n*{description}*"
                 
-            # Add context-specific messages
-            if context_type == "drop":
-                card_description += f"\n\n⚡ **React 🃏 to claim!**"
-            elif context_type == "admin_drop":
-                card_description += f"\n\n⚡ **React 🃏 to claim!**"
-            elif context_type == "daily":
+            # Add context-specific messages (except drop claims - those are separate messages)
+            if context_type == "daily":
                 card_description += f"\n\n🎁 **Daily card claimed!**"
             
             image_embed = discord.Embed(
@@ -1186,6 +1236,9 @@ class TradingCards(commands.Cog):
                 message = await channel.send(embed=image_embed, file=discord_file)
             else:
                 message = await channel.send(embed=image_embed)
+            
+            # Send separate claim instruction
+            await channel.send("⚡ **React 🃏 to claim!**")
             
             await message.add_reaction('🃏')
         else:
