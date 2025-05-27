@@ -28,9 +28,7 @@ class CollectionView(discord.ui.View):
         # Next button  
         self.next_button.disabled = self.current_index >= len(self.cards) - 1
         
-        # Update labels with current position
-        self.previous_button.label = f"← Previous"
-        self.next_button.label = f"Next →"
+        # Update labels with current position (only for info button now)
         self.info_button.label = f"Card {self.current_index + 1}/{len(self.cards)}"
     
     def create_card_embed(self, index):
@@ -48,7 +46,6 @@ class CollectionView(discord.ui.View):
             # Keep the card name as title (like !card info)
             # Keep original footer without collection info
             # The collection context will be added as a separate message above the embed
-            image_embed.timestamp = datetime.now()
             
             return image_embed
         else:
@@ -58,7 +55,7 @@ class CollectionView(discord.ui.View):
                 description=f"{self.trading_cards.get_rarity_emoji(card[3])} **{card[3]}**\n\n*No image available*",
                 color=self.trading_cards.get_rarity_color(card[3])
             )
-            fallback_embed.timestamp = datetime.now()
+            
             return fallback_embed
     
     def get_rarity_rate(self, rarity):
@@ -71,7 +68,7 @@ class CollectionView(discord.ui.View):
         }
         return rates.get(rarity, 'Unknown')
     
-    @discord.ui.button(label='← Previous', style=discord.ButtonStyle.secondary, emoji='⬅️')
+    @discord.ui.button(label='', style=discord.ButtonStyle.secondary, emoji='⬅️')
     async def previous_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user != self.user:
             await interaction.response.send_message("❌ This is not your collection!", ephemeral=True)
@@ -86,9 +83,12 @@ class CollectionView(discord.ui.View):
             current_card = self.cards[self.current_index]
             data_embed, image_embed, discord_file = self.trading_cards.create_card_embeds(current_card, "showcase")
             
+            # Always work properly - send new message if file needed, edit if not
             if discord_file:
-                # Need to send new message with file, can't edit with file
-                await interaction.response.send_message("Navigation with local images requires a new message...", ephemeral=True)
+                # Send new message with file and delete old one
+                await interaction.response.defer()
+                await interaction.delete_original_response()
+                await interaction.followup.send(embed=embed, view=self, file=discord_file)
             else:
                 await interaction.response.edit_message(embed=embed, view=self)
         else:
@@ -120,7 +120,7 @@ class CollectionView(discord.ui.View):
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
     
-    @discord.ui.button(label='Next →', style=discord.ButtonStyle.secondary, emoji='➡️')
+    @discord.ui.button(label='', style=discord.ButtonStyle.secondary, emoji='➡️')
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user != self.user:
             await interaction.response.send_message("❌ This is not your collection!", ephemeral=True)
@@ -135,15 +135,18 @@ class CollectionView(discord.ui.View):
             current_card = self.cards[self.current_index]
             data_embed, image_embed, discord_file = self.trading_cards.create_card_embeds(current_card, "showcase")
             
+            # Always work properly - send new message if file needed, edit if not
             if discord_file:
-                # Need to send new message with file, can't edit with file
-                await interaction.response.send_message("Navigation with local images requires a new message...", ephemeral=True)
+                # Send new message with file and delete old one
+                await interaction.response.defer()
+                await interaction.delete_original_response()
+                await interaction.followup.send(embed=embed, view=self, file=discord_file)
             else:
                 await interaction.response.edit_message(embed=embed, view=self)
         else:
             await interaction.response.defer()
     
-    @discord.ui.button(label='📝 Text List', style=discord.ButtonStyle.secondary, emoji='📝')
+    @discord.ui.button(label='Text List', style=discord.ButtonStyle.secondary)
     async def text_list_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user != self.user:
             await interaction.response.send_message("❌ This is not your collection!", ephemeral=True)
@@ -155,30 +158,37 @@ class CollectionView(discord.ui.View):
             color=0x7289da
         )
         
-        # Group cards by rarity
-        rarity_groups = {
-            'Legendary': [],
-            'Rare': [],
-            'Uncommon': [],
-            'Common': []
-        }
+        # Create flat list with card name • rarity format
+        card_list = []
         
         for card in self.cards:
             name, rarity = card[1], card[3]
             count = card[6] if len(card) > 6 else 1
             count_text = f" x{count}" if count > 1 else ""
-            rarity_groups[rarity].append(f"• {name}{count_text}")
+            emoji = self.trading_cards.get_rarity_emoji(rarity)
+            
+            card_list.append(f"{name}{count_text} • {emoji} {rarity}")
         
-        # Add each rarity section
-        for rarity in ['Legendary', 'Rare', 'Uncommon', 'Common']:
-            if rarity_groups[rarity]:
-                emoji = self.trading_cards.get_rarity_emoji(rarity)
-                card_list = "\n".join(rarity_groups[rarity])
-                embed.add_field(
-                    name=f"{emoji} {rarity} ({len(rarity_groups[rarity])})",
-                    value=card_list,
-                    inline=False
-                )
+        # Sort by rarity (Legendary first) then by name
+        rarity_order = {'Legendary': 1, 'Rare': 2, 'Uncommon': 3, 'Common': 4}
+        card_list.sort(key=lambda x: (rarity_order.get(x.split(' • ')[1].split(' ')[1], 5), x.split(' • ')[0]))
+        
+        # Add as one field or split if too long
+        full_list = "\n".join(card_list)
+        if len(full_list) <= 1024:  # Discord field value limit
+            embed.add_field(
+                name="Cards",
+                value=full_list,
+                inline=False
+            )
+        else:
+            # Split into multiple fields if too long
+            mid_point = len(card_list) // 2
+            first_half = "\n".join(card_list[:mid_point])
+            second_half = "\n".join(card_list[mid_point:])
+            
+            embed.add_field(name="Cards (Part 1)", value=first_half, inline=False)
+            embed.add_field(name="Cards (Part 2)", value=second_half, inline=False)
         
         embed.set_footer(text=f"Total: {len(self.cards)} unique cards")
         
@@ -502,7 +512,7 @@ class TradingCards(commands.Cog):
         embed = view.create_card_embed(0)  # Start with first card
         
         # Send collection info as separate message first
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        timestamp = datetime.now().strftime("Today at %H:%M")
         collection_msg = f"**🃏 {target_user.display_name}'s Collection** • {timestamp}"
         await ctx.send(collection_msg)
         
