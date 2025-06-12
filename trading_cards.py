@@ -70,10 +70,6 @@ class CollectionView(discord.ui.View):
     
     @discord.ui.button(label='', style=discord.ButtonStyle.secondary, emoji='⬅️')
     async def previous_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user != self.user:
-            await interaction.response.send_message("❌ This is not your collection!", ephemeral=True)
-            return
-            
         if self.current_index > 0:
             self.current_index -= 1
             self.update_buttons()
@@ -96,10 +92,6 @@ class CollectionView(discord.ui.View):
     
     @discord.ui.button(label='Card 1/X', style=discord.ButtonStyle.primary, emoji='📊')
     async def info_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user != self.user:
-            await interaction.response.send_message("❌ This is not your collection!", ephemeral=True)
-            return
-            
         # Show quick stats
         card = self.cards[self.current_index]
         card_id = card[0]
@@ -122,10 +114,6 @@ class CollectionView(discord.ui.View):
     
     @discord.ui.button(label='', style=discord.ButtonStyle.secondary, emoji='➡️')
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user != self.user:
-            await interaction.response.send_message("❌ This is not your collection!", ephemeral=True)
-            return
-            
         if self.current_index < len(self.cards) - 1:
             self.current_index += 1
             self.update_buttons()
@@ -148,10 +136,6 @@ class CollectionView(discord.ui.View):
     
     @discord.ui.button(label='Text List', style=discord.ButtonStyle.secondary)
     async def text_list_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user != self.user:
-            await interaction.response.send_message("❌ This is not your collection!", ephemeral=True)
-            return
-        
         # Create text list of all cards
         embed = discord.Embed(
             title=f"📝 {self.user.display_name}'s Card Collection",
